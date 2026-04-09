@@ -79,6 +79,13 @@ $initials = strtoupper(substr($etudiant['prenom'], 0, 1) . substr($etudiant['nom
             </svg>
             Mes notes
         </a>
+        <a href="releve%20de%20note.php" class="nav-item" target="_blank" rel="noopener noreferrer">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M4 3h8v10H4z" fill="none" stroke="currentColor" stroke-width="1.4"/>
+                <path d="M6 5h4M6 8h4M6 11h2" stroke="currentColor" stroke-width="1.4" fill="none"/>
+            </svg>
+            Relevé de note
+        </a>
         <a href="?panel=profil" class="nav-item <?= $panel === 'profil' ? 'active-blue' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <circle cx="8" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/>
