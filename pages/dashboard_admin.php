@@ -26,15 +26,41 @@ if (isset($_POST['delete_mod'])) {
     $notif = '<div class="notif notif-ok">Module supprimé.</div>';
 }
 
-// Ajouter un étudiant
+// Créer un compte étudiant
 if (isset($_POST['add_etud'])) {
-    $hash = password_hash($_POST['ae_pw'], PASSWORD_BCRYPT);
-    try {
-        $stmt = $pdo->prepare("INSERT INTO etudiants (nom, prenom, email, matricule, niveau, mot_de_passe) VALUES (?,?,?,?,?,?)");
-        $stmt->execute([$_POST['ae_nom'], $_POST['ae_prenom'], $_POST['ae_email'], $_POST['ae_matricule'], $_POST['ae_niveau'], $hash]);
-        $notif = '<div class="notif notif-ok">Étudiant ajouté avec succès.</div>';
-    } catch (\PDOException $e) {
-        $notif = '<div class="notif notif-err">Erreur : email ou matricule déjà utilisé.</div>';
+    $res = admin_create_account([
+        'role'           => 'etudiant',
+        'nom'            => $_POST['ae_nom']        ?? '',
+        'prenom'         => $_POST['ae_prenom']     ?? '',
+        'email'          => $_POST['ae_email']      ?? '',
+        'matricule'      => $_POST['ae_matricule']  ?? '',
+        'niveau'         => $_POST['ae_niveau']     ?? 'L1 Info',
+        'date_naissance' => $_POST['ae_dob']        ?? null,
+        'temp_password'  => $_POST['ae_pw']         ?? '',
+    ]);
+    if ($res['success']) {
+        $notif = '<div class="notif notif-ok">✅ Compte étudiant créé. Mot de passe temporaire : <strong>' . h($res['temp_pw']) . '</strong> — À communiquer à l\'étudiant.</div>';
+    } else {
+        $notif = '<div class="notif notif-err">' . h($res['message']) . '</div>';
+    }
+}
+
+// Créer un compte enseignant
+if (isset($_POST['add_ens'])) {
+    $res = admin_create_account([
+        'role'          => 'enseignant',
+        'nom'           => $_POST['ens_nom']        ?? '',
+        'prenom'        => $_POST['ens_prenom']     ?? '',
+        'email'         => $_POST['ens_email']      ?? '',
+        'grade'         => $_POST['ens_grade']      ?? 'Dr.',
+        'departement'   => $_POST['ens_dept']       ?? 'Informatique',
+        'specialite'    => $_POST['ens_spec']       ?? '',
+        'temp_password' => $_POST['ens_pw']         ?? '',
+    ]);
+    if ($res['success']) {
+        $notif = '<div class="notif notif-ok">✅ Compte enseignant créé. Mot de passe temporaire : <strong>' . h($res['temp_pw']) . '</strong> — À communiquer à l\'enseignant.</div>';
+    } else {
+        $notif = '<div class="notif notif-err">' . h($res['message']) . '</div>';
     }
 }
 
@@ -186,15 +212,22 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
 
         <!-- Bouton Ajouter -->
         <div style="margin-bottom:14px;">
-            <button class="btn-blue" onclick="toggleForm('add-etud-form')">+ Ajouter un étudiant</button>
+            <button class="btn-blue" onclick="toggleForm('add-etud-form')">+ Créer un compte étudiant</button>
         </div>
+
+        <!-- Info box -->
+        <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:var(--radius-md); padding:10px 14px; font-size:11px; color:#1E40AF; margin-bottom:14px; display:flex; gap:8px;">
+            <span>ℹ️</span>
+            <div>Seul l'administrateur peut créer des comptes. Un <strong>mot de passe temporaire</strong> est attribué — l'étudiant devra le changer à sa première connexion.</div>
+        </div>
+
         <div id="add-etud-form" class="form-inline">
             <form method="POST">
                 <div class="stat-grid sg3">
-                    <div class="fg"><label>Nom</label><input type="text" name="ae_nom" required placeholder="Nom"></div>
+                    <div class="fg"><label>Nom</label><input type="text" name="ae_nom" required placeholder="Nom de famille"></div>
                     <div class="fg"><label>Prénom</label><input type="text" name="ae_prenom" required placeholder="Prénom"></div>
                     <div class="fg"><label>Email</label><input type="email" name="ae_email" required placeholder="email@usthb.dz"></div>
-                    <div class="fg"><label>Matricule</label><input type="text" name="ae_matricule" required placeholder="12345"></div>
+                    <div class="fg"><label>Matricule</label><input type="text" name="ae_matricule" required placeholder="ex : 12345"></div>
                     <div class="fg">
                         <label>Niveau</label>
                         <select name="ae_niveau">
@@ -203,16 +236,28 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="fg"><label>Mot de passe</label><input type="password" name="ae_pw" required placeholder="••••••••"></div>
+                    <div class="fg"><label>Date de naissance</label><input type="date" name="ae_dob"></div>
                 </div>
-                <button type="submit" name="add_etud" class="btn-blue">Enregistrer</button>
+                <div class="fg" style="max-width:300px;">
+                    <label>🔑 Mot de passe temporaire</label>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <input type="text" name="ae_pw" id="ae_pw" required placeholder="ex : USTHB@2025" style="flex:1;">
+                        <button type="button" onclick="genPw('ae_pw')" class="btn-blue" style="white-space:nowrap;">Générer</button>
+                    </div>
+                    <div style="font-size:10px; color:var(--color-text-tertiary); margin-top:3px;">Ce mot de passe sera communiqué à l'étudiant. Il devra le changer à la connexion.</div>
+                </div>
+                <button type="submit" name="add_etud" class="btn-blue">✅ Créer le compte</button>
+                <button type="button" onclick="toggleForm('add-etud-form')" style="margin-left:8px;" class="btn-sm">Annuler</button>
             </form>
         </div>
 
         <div class="card">
-            <div class="card-header"><div class="card-title">Liste des étudiants</div><span class="badge b-mid"><?= $nb_etudiants ?> étudiants</span></div>
+            <div class="card-header">
+                <div class="card-title">Liste des étudiants</div>
+                <span class="badge b-mid"><?= $nb_etudiants ?> étudiants</span>
+            </div>
             <table>
-                <thead><tr><th>Matricule</th><th>Nom & Prénom</th><th>Email</th><th>Niveau</th><th>Inscrit le</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Matricule</th><th>Nom & Prénom</th><th>Email</th><th>Niveau</th><th>Statut MDP</th><th>Inscrit le</th><th>Actions</th></tr></thead>
                 <tbody>
                 <?php foreach ($etudiants as $e): ?>
                 <tr>
@@ -220,6 +265,13 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                     <td><?= h($e['nom'] . ' ' . $e['prenom']) ?></td>
                     <td><?= h($e['email']) ?></td>
                     <td><?= h($e['niveau']) ?></td>
+                    <td>
+                        <?php if ($e['must_change_password']): ?>
+                            <span class="badge b-mid">⏳ Temporaire</span>
+                        <?php else: ?>
+                            <span class="badge b-ok">✓ Modifié</span>
+                        <?php endif; ?>
+                    </td>
                     <td><?= date('d/m/Y', strtotime($e['created_at'])) ?></td>
                     <td>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Supprimer cet étudiant ?')">
@@ -236,12 +288,57 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
         <?php elseif ($panel === 'enseignants'): ?>
         <!-- ── Enseignants ── -->
         <div class="page-head">
-            <div class="page-title">Liste des enseignants</div>
+            <div class="page-title">Gestion des enseignants</div>
             <div class="page-sub"><?= $nb_enseignants ?> enseignants enregistrés</div>
         </div>
+
+        <div style="margin-bottom:14px;">
+            <button class="btn-blue" onclick="toggleForm('add-ens-form')">+ Créer un compte enseignant</button>
+        </div>
+
+        <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:var(--radius-md); padding:10px 14px; font-size:11px; color:#1E40AF; margin-bottom:14px; display:flex; gap:8px;">
+            <span>ℹ️</span>
+            <div>L'enseignant recevra un <strong>mot de passe temporaire</strong> qu'il devra changer à sa première connexion.</div>
+        </div>
+
+        <div id="add-ens-form" class="form-inline">
+            <form method="POST">
+                <div class="stat-grid sg3">
+                    <div class="fg"><label>Nom</label><input type="text" name="ens_nom" required placeholder="Nom"></div>
+                    <div class="fg"><label>Prénom</label><input type="text" name="ens_prenom" required placeholder="Prénom"></div>
+                    <div class="fg"><label>Email</label><input type="email" name="ens_email" required placeholder="email@usthb.dz"></div>
+                    <div class="fg">
+                        <label>Grade</label>
+                        <select name="ens_grade">
+                            <?php foreach (['Assistant','Dr.','Pr.','MCA','MCB'] as $g): ?>
+                            <option><?= $g ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="fg">
+                        <label>Département</label>
+                        <select name="ens_dept">
+                            <option>Informatique</option>
+                            <option>Math &amp; Info</option>
+                        </select>
+                    </div>
+                    <div class="fg"><label>Spécialité</label><input type="text" name="ens_spec" placeholder="ex : Réseaux, BD…"></div>
+                </div>
+                <div class="fg" style="max-width:300px;">
+                    <label>🔑 Mot de passe temporaire</label>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <input type="text" name="ens_pw" id="ens_pw" required placeholder="ex : ENS@USTHB25" style="flex:1;">
+                        <button type="button" onclick="genPw('ens_pw')" class="btn-blue" style="white-space:nowrap;">Générer</button>
+                    </div>
+                </div>
+                <button type="submit" name="add_ens" class="btn-blue">✅ Créer le compte</button>
+                <button type="button" onclick="toggleForm('add-ens-form')" style="margin-left:8px;" class="btn-sm">Annuler</button>
+            </form>
+        </div>
+
         <div class="card">
             <table>
-                <thead><tr><th>ID</th><th>Nom & Prénom</th><th>Grade</th><th>Email</th><th>Département</th><th>Spécialité</th></tr></thead>
+                <thead><tr><th>ID</th><th>Nom & Prénom</th><th>Grade</th><th>Email</th><th>Département</th><th>Spécialité</th><th>Statut MDP</th></tr></thead>
                 <tbody>
                 <?php foreach ($enseignants as $e): ?>
                 <tr>
@@ -251,6 +348,13 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                     <td><?= h($e['email']) ?></td>
                     <td><?= h($e['departement']) ?></td>
                     <td><?= h($e['specialite'] ?? '–') ?></td>
+                    <td>
+                        <?php if ($e['must_change_password']): ?>
+                            <span class="badge b-mid">⏳ Temporaire</span>
+                        <?php else: ?>
+                            <span class="badge b-ok">✓ Modifié</span>
+                        <?php endif; ?>
+                    </td>
                 </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -432,6 +536,13 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
 function toggleForm(id) {
     var el = document.getElementById(id);
     el.classList.toggle('show');
+}
+function genPw(fieldId) {
+    var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!';
+    var pw = '';
+    for (var i = 0; i < 10; i++) pw += chars[Math.floor(Math.random() * chars.length)];
+    document.getElementById(fieldId).value = pw;
+    document.getElementById(fieldId).type  = 'text';
 }
 </script>
 </body>

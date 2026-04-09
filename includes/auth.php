@@ -45,85 +45,102 @@ function login(string $identifiant, string $password, string $role): array {
     $_SESSION['user_nom']  = $user['prenom'] . ' ' . $user['nom'];
 
     if ($role === 'etudiant') {
-        $_SESSION['user_niveau'] = $user['niveau'] ?? '';
+        $_SESSION['user_niveau']    = $user['niveau'] ?? '';
         $_SESSION['user_matricule'] = $user['matricule'] ?? '';
     }
 
-    return ['success' => true];
+    // Détecter si c'est la première connexion (mot de passe temporaire)
+    $must_change = isset($user['must_change_password']) ? (bool)$user['must_change_password'] : false;
+    $_SESSION['must_change_password'] = $must_change;
+
+    return ['success' => true, 'must_change' => $must_change];
 }
 
-/* ── Inscription ──────────────────────────────────────────── */
-function register(array $data): array {
-    $pdo = get_pdo();
-
+/* ── Créer un compte (réservé à l'admin) ─────────────────── */
+function admin_create_account(array $data): array {
+    $pdo  = get_pdo();
     $role = $data['role'] ?? '';
 
-    // Validation basique
-    if (empty($data['nom']) || empty($data['prenom']) || empty($data['email']) || empty($data['password'])) {
+    if (empty($data['nom']) || empty($data['prenom']) || empty($data['email']) || empty($data['temp_password'])) {
         return ['success' => false, 'message' => 'Veuillez remplir tous les champs obligatoires.'];
     }
     if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
         return ['success' => false, 'message' => 'Adresse email invalide.'];
     }
-    if (strlen($data['password']) < 6) {
-        return ['success' => false, 'message' => 'Le mot de passe doit contenir au moins 6 caractères.'];
-    }
-    if ($data['password'] !== $data['confirm_password']) {
-        return ['success' => false, 'message' => 'Les mots de passe ne correspondent pas.'];
+    if (strlen($data['temp_password']) < 4) {
+        return ['success' => false, 'message' => 'Le mot de passe temporaire doit contenir au moins 4 caractères.'];
     }
 
-    $hash = password_hash($data['password'], PASSWORD_BCRYPT);
+    $hash = password_hash($data['temp_password'], PASSWORD_BCRYPT);
 
     try {
         if ($role === 'etudiant') {
-            // Vérifier matricule unique
-            $stmt = $pdo->prepare("SELECT id FROM etudiants WHERE matricule = ? OR email = ?");
-            $stmt->execute([$data['matricule'], $data['email']]);
-            if ($stmt->fetch()) {
+            if (empty($data['matricule'])) {
+                return ['success' => false, 'message' => 'Le matricule est obligatoire.'];
+            }
+            $chk = $pdo->prepare("SELECT id FROM etudiants WHERE matricule = ? OR email = ?");
+            $chk->execute([$data['matricule'], $data['email']]);
+            if ($chk->fetch()) {
                 return ['success' => false, 'message' => 'Ce matricule ou cet email est déjà utilisé.'];
             }
-            $stmt = $pdo->prepare("INSERT INTO etudiants (nom, prenom, email, matricule, niveau, date_naissance, mot_de_passe) VALUES (?,?,?,?,?,?,?)");
+            $stmt = $pdo->prepare("INSERT INTO etudiants (nom, prenom, email, matricule, niveau, date_naissance, mot_de_passe, must_change_password) VALUES (?,?,?,?,?,?,?,1)");
             $stmt->execute([
                 $data['nom'], $data['prenom'], $data['email'],
-                $data['matricule'], $data['niveau'],
+                $data['matricule'], $data['niveau'] ?? 'L1 Info',
                 $data['date_naissance'] ?? null, $hash
             ]);
 
         } elseif ($role === 'enseignant') {
-            $stmt = $pdo->prepare("SELECT id FROM enseignants WHERE email = ?");
-            $stmt->execute([$data['email']]);
-            if ($stmt->fetch()) {
+            $chk = $pdo->prepare("SELECT id FROM enseignants WHERE email = ?");
+            $chk->execute([$data['email']]);
+            if ($chk->fetch()) {
                 return ['success' => false, 'message' => 'Cet email est déjà utilisé.'];
             }
-            $stmt = $pdo->prepare("INSERT INTO enseignants (nom, prenom, email, grade, departement, specialite, mot_de_passe) VALUES (?,?,?,?,?,?,?)");
+            $stmt = $pdo->prepare("INSERT INTO enseignants (nom, prenom, email, grade, departement, specialite, mot_de_passe, must_change_password) VALUES (?,?,?,?,?,?,?,1)");
             $stmt->execute([
                 $data['nom'], $data['prenom'], $data['email'],
-                $data['grade'], $data['departement'], $data['specialite'] ?? '', $hash
-            ]);
-
-        } elseif ($role === 'admin') {
-            // Vérifier le code admin
-            if (($data['code_admin'] ?? '') !== 'USTHB2025') {
-                return ['success' => false, 'message' => 'Code d\'accès administrateur invalide.'];
-            }
-            $stmt = $pdo->prepare("SELECT id FROM admins WHERE email = ?");
-            $stmt->execute([$data['email']]);
-            if ($stmt->fetch()) {
-                return ['success' => false, 'message' => 'Cet email est déjà utilisé.'];
-            }
-            $stmt = $pdo->prepare("INSERT INTO admins (nom, prenom, email, service, mot_de_passe) VALUES (?,?,?,?,?)");
-            $stmt->execute([
-                $data['nom'], $data['prenom'], $data['email'],
-                $data['service'] ?? '', $hash
+                $data['grade'] ?? 'Dr.', $data['departement'] ?? 'Informatique',
+                $data['specialite'] ?? '', $hash
             ]);
         } else {
-            return ['success' => false, 'message' => 'Rôle invalide.'];
+            return ['success' => false, 'message' => 'Rôle invalide (etudiant ou enseignant uniquement).'];
         }
     } catch (\PDOException $e) {
         return ['success' => false, 'message' => 'Erreur serveur : ' . $e->getMessage()];
     }
 
-    return ['success' => true, 'message' => 'Compte créé avec succès ! Vous pouvez maintenant vous connecter.'];
+    return [
+        'success'  => true,
+        'message'  => 'Compte créé avec succès. Mot de passe temporaire : ' . $data['temp_password'],
+        'temp_pw'  => $data['temp_password'],
+    ];
+}
+
+/* ── Changer le mot de passe ──────────────────────────────── */
+function change_password(int $user_id, string $role, string $new_password, string $confirm): array {
+    if (strlen($new_password) < 6) {
+        return ['success' => false, 'message' => 'Le mot de passe doit contenir au moins 6 caractères.'];
+    }
+    if ($new_password !== $confirm) {
+        return ['success' => false, 'message' => 'Les mots de passe ne correspondent pas.'];
+    }
+
+    $table = match($role) {
+        'etudiant'   => 'etudiants',
+        'enseignant' => 'enseignants',
+        default      => null,
+    };
+
+    if (!$table) return ['success' => false, 'message' => 'Rôle invalide.'];
+
+    $hash = password_hash($new_password, PASSWORD_BCRYPT);
+    $pdo  = get_pdo();
+    $stmt = $pdo->prepare("UPDATE $table SET mot_de_passe = ?, must_change_password = 0 WHERE id = ?");
+    $stmt->execute([$hash, $user_id]);
+
+    $_SESSION['must_change_password'] = false;
+
+    return ['success' => true];
 }
 
 /* ── Utilitaires ──────────────────────────────────────────── */

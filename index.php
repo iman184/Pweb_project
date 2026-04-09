@@ -32,7 +32,6 @@ if (is_logged_in()) {
     <div class="nav-links">
         <a href="index.php"   class="nav-link active">Accueil</a>
         <a href="login.php"   class="nav-link">Connexion</a>
-        <a href="register.php" class="nav-link">Inscription</a>
     </div>
     <a href="login.php"><button class="btn-nav">Se connecter</button></a>
 </nav>
@@ -48,8 +47,7 @@ if (is_logged_in()) {
         Plateforme centralisée pour la gestion des étudiants, des notes, des modules et des relevés académiques.
     </div>
     <div class="hero-btns">
-        <a href="login.php">   <button class="btn-primary">Se connecter</button></a>
-        <a href="register.php"><button class="btn-outline">Créer un compte</button></a>
+        <a href="login.php"><button class="btn-primary">Se connecter</button></a>
     </div>
 </section>
 
@@ -92,21 +90,21 @@ if (is_logged_in()) {
 <section class="roles-section">
     <div class="section-label">Espaces disponibles</div>
     <div class="roles-grid">
-        <a href="login.php?role=etudiant" class="role-card">
-            <div class="role-dot blue"></div>
-            <div class="role-name">Étudiant</div>
-            <div class="role-desc">Consulter vos notes, relevés et résultats académiques.</div>
-        </a>
-        <a href="login.php?role=enseignant" class="role-card">
-            <div class="role-dot green"></div>
-            <div class="role-name">Enseignant</div>
-            <div class="role-desc">Saisir les notes, gérer vos modules et suivre les résultats.</div>
-        </a>
-        <a href="login.php?role=admin" class="role-card">
-            <div class="role-dot amber"></div>
-            <div class="role-name">Administrateur</div>
-            <div class="role-desc">Gestion complète : étudiants, enseignants, modules et inscriptions.</div>
-        </a>
+    <a href="login.php?role=etudiant" class="role-card">
+        <div class="role-dot blue"></div>
+        <div class="role-name">Étudiant</div>
+        <div class="role-desc">Consulter vos notes, relevés et résultats académiques.</div>
+    </a>
+    <a href="login.php?role=enseignant" class="role-card">
+        <div class="role-dot green"></div>
+        <div class="role-name">Enseignant</div>
+        <div class="role-desc">Saisir les notes, gérer vos modules et suivre les résultats.</div>
+    </a>
+    <a href="login.php?role=admin" class="role-card">
+        <div class="role-dot amber"></div>
+        <div class="role-name">Administrateur</div>
+        <div class="role-desc">Gestion complète : étudiants, enseignants, modules et inscriptions.</div>
+    </a>
     </div>
 </section>
 

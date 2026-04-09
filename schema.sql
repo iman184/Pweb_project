@@ -9,30 +9,32 @@ USE usthb_scolarite;
 
 -- ── Étudiants ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS etudiants (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    nom             VARCHAR(80)  NOT NULL,
-    prenom          VARCHAR(80)  NOT NULL,
-    email           VARCHAR(120) NOT NULL UNIQUE,
-    matricule       VARCHAR(20)  NOT NULL UNIQUE,
-    niveau          VARCHAR(30)  NOT NULL DEFAULT 'L1 Info',
-    date_naissance  DATE,
-    mot_de_passe    VARCHAR(255) NOT NULL,
-    actif           TINYINT(1)   NOT NULL DEFAULT 1,
-    created_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+    id                   INT AUTO_INCREMENT PRIMARY KEY,
+    nom                  VARCHAR(80)  NOT NULL,
+    prenom               VARCHAR(80)  NOT NULL,
+    email                VARCHAR(120) NOT NULL UNIQUE,
+    matricule            VARCHAR(20)  NOT NULL UNIQUE,
+    niveau               VARCHAR(30)  NOT NULL DEFAULT 'L1 Info',
+    date_naissance       DATE,
+    mot_de_passe         VARCHAR(255) NOT NULL,
+    must_change_password TINYINT(1)   NOT NULL DEFAULT 1,
+    actif                TINYINT(1)   NOT NULL DEFAULT 1,
+    created_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ── Enseignants ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS enseignants (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    nom             VARCHAR(80)  NOT NULL,
-    prenom          VARCHAR(80)  NOT NULL,
-    email           VARCHAR(120) NOT NULL UNIQUE,
-    grade           VARCHAR(30)  NOT NULL DEFAULT 'Dr.',
-    departement     VARCHAR(80)  NOT NULL DEFAULT 'Informatique',
-    specialite      VARCHAR(120),
-    mot_de_passe    VARCHAR(255) NOT NULL,
-    actif           TINYINT(1)   NOT NULL DEFAULT 1,
-    created_at      TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+    id                   INT AUTO_INCREMENT PRIMARY KEY,
+    nom                  VARCHAR(80)  NOT NULL,
+    prenom               VARCHAR(80)  NOT NULL,
+    email                VARCHAR(120) NOT NULL UNIQUE,
+    grade                VARCHAR(30)  NOT NULL DEFAULT 'Dr.',
+    departement          VARCHAR(80)  NOT NULL DEFAULT 'Informatique',
+    specialite           VARCHAR(120),
+    mot_de_passe         VARCHAR(255) NOT NULL,
+    must_change_password TINYINT(1)   NOT NULL DEFAULT 1,
+    actif                TINYINT(1)   NOT NULL DEFAULT 1,
+    created_at           TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ── Administrateurs ───────────────────────────────────────
@@ -87,19 +89,19 @@ CREATE TABLE IF NOT EXISTS notes (
 -- ============================================================
 
 -- Mot de passe commun : "password123"  (bcrypt hash)
-SET @hash = '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi';
+SET @hash = '$2y$10$QOWcGH7HuNxsIFwWBt7qpufAPxd2.KRoAvb3uV1VAPVbShIYXXCRi';
 
-INSERT IGNORE INTO etudiants (nom, prenom, email, matricule, niveau, date_naissance, mot_de_passe)
+INSERT IGNORE INTO etudiants (nom, prenom, email, matricule, niveau, date_naissance, mot_de_passe, must_change_password)
 VALUES
-    ('Karim',  'Ali',   'ali.karim@usthb.dz',   '12345', 'L2 ISIL',  '2002-03-14', @hash),
-    ('Houda',  'Leila', 'leila.houda@usthb.dz',  '67899', 'L2 ISIL',  '2002-07-22', @hash),
-    ('Bouzid', 'Omar',  'omar.bouzid@usthb.dz',  '34521', 'L3 Info',  '2001-11-05', @hash);
+    ('Karim',  'Ali',   'ali.karim@usthb.dz',   '12345', 'L2 ISIL',  '2002-03-14', @hash, 0),
+    ('Houda',  'Leila', 'leila.houda@usthb.dz',  '67899', 'L2 ISIL',  '2002-07-22', @hash, 0),
+    ('Bouzid', 'Omar',  'omar.bouzid@usthb.dz',  '34521', 'L3 Info',  '2001-11-05', @hash, 0);
 
-INSERT IGNORE INTO enseignants (nom, prenom, email, grade, departement, specialite, mot_de_passe)
+INSERT IGNORE INTO enseignants (nom, prenom, email, grade, departement, specialite, mot_de_passe, must_change_password)
 VALUES
-    ('Laachemi',  'Salim',  'laachemi@usthb.dz',  'Dr.', 'Informatique',  'Bases de données, Web', @hash),
-    ('Hamidi',    'Nadia',  'hamidi@usthb.dz',    'Pr.', 'Math & Info',   'Algorithmique, Maths',  @hash),
-    ('Benali',    'Youssef','benali@usthb.dz',     'Dr.', 'Informatique',  'Réseaux',               @hash);
+    ('Laachemi',  'Salim',  'laachemi@usthb.dz',  'Dr.', 'Informatique',  'Bases de données, Web', @hash, 0),
+    ('Hamidi',    'Nadia',  'hamidi@usthb.dz',    'Pr.', 'Math & Info',   'Algorithmique, Maths',  @hash, 0),
+    ('Benali',    'Youssef','benali@usthb.dz',     'Dr.', 'Informatique',  'Réseaux',               @hash, 0);
 
 INSERT IGNORE INTO admins (nom, prenom, email, service, mot_de_passe)
 VALUES ('Admin', 'Scolarité', 'admin@usthb.dz', 'Scolarité centrale', @hash);
