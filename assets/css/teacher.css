@@ -1,0 +1,85 @@
+/* ============================================================
+   teacher.css — Styles specific to the teacher dashboard
+   Link this in dashboard_enseignant.php
+   ============================================================ */
+
+/* ── Grade input boxes ── */
+.note-input {
+    width: 62px; padding: 5px 7px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm); font-size: 12px;
+    background: var(--color-bg-white); color: var(--color-text);
+    outline: none; transition: border-color .15s;
+}
+.note-input:focus { border-color: var(--color-primary); }
+
+/* ── Attendance P/A buttons ── */
+.att-btn {
+    display: inline-block; width: 34px; height: 22px; line-height: 22px;
+    text-align: center; border-radius: 4px; font-size: 11px; font-weight: 700;
+    cursor: pointer; border: none; transition: background .15s;
+}
+.att-btn.P { background: var(--color-green-light); color: var(--color-green); }
+.att-btn.P:hover { background: #d0e9b8; }
+.att-btn.A { background: var(--color-red-light); color: var(--color-red); }
+.att-btn.A:hover { background: #f7d0d0; }
+
+/* ── Excluded student row ── */
+.row-excluded { background: var(--color-red-light) !important; }
+.row-excluded td { color: var(--color-red) !important; }
+
+/* ── Timetable ── */
+.tt-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.tt-table th, .tt-table td { border: 1px solid var(--color-border-light); padding: 8px 10px; text-align: center; }
+.tt-table th { background: var(--color-bg-secondary); font-size: 11px; font-weight: 700; color: var(--color-text-secondary); }
+.tt-time { font-family: monospace; font-size: 11px; color: var(--color-text-secondary); background: var(--color-bg-secondary); }
+.tt-cours { background: #dbeafe; color: #1e40af; border-left: 3px solid #1e40af; padding: 6px 8px; border-radius: 4px; }
+.tt-td    { background: var(--color-green-light); color: var(--color-green); border-left: 3px solid var(--color-green); padding: 6px 8px; border-radius: 4px; }
+.tt-tp    { background: var(--color-amber-light); color: var(--color-amber); border-left: 3px solid var(--color-amber); padding: 6px 8px; border-radius: 4px; }
+.tt-type  { font-weight: 700; font-size: 12px; }
+.tt-group { font-size: 10px; margin-top: 2px; }
+.tt-room  { font-size: 10px; color: var(--color-text-tertiary); }
+
+/* ── Send results button ── */
+.btn-send {
+    padding: 9px 22px; background: var(--color-green); color: #fff;
+    border: none; border-radius: var(--radius-md); font-size: 13px;
+    font-weight: 600; cursor: pointer; margin-top: 16px; transition: background .15s;
+}
+.btn-send:hover { background: #2d5a0d; }
+
+/* ── TD / TP type switcher ── */
+.type-switch { display: flex; gap: 6px; margin-bottom: 14px; }
+.type-btn {
+    padding: 6px 16px; font-size: 12px; font-weight: 600;
+    border: 1px solid var(--color-border); border-radius: var(--radius-md);
+    cursor: pointer; text-decoration: none; color: var(--color-text-secondary);
+    transition: all .15s;
+}
+.type-btn.active-td { background: var(--color-green-light); color: var(--color-green); border-color: var(--color-green); }
+.type-btn.active-tp { background: var(--color-amber-light); color: var(--color-amber); border-color: var(--color-amber); }
+.type-btn:hover:not(.active-td):not(.active-tp) { background: var(--color-bg-secondary); }
+
+/* ── Grade distribution chart ── */
+.chart-wrap { margin-top: 6px; }
+.chart-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px; font-size: 12px;
+}
+.chart-label { width: 70px; color: var(--color-text-secondary); font-size: 11px; flex-shrink: 0; }
+.chart-bar-bg {
+    flex: 1; background: var(--color-bg-secondary);
+    border-radius: 4px; height: 18px; overflow: hidden;
+}
+.chart-bar {
+    height: 100%; border-radius: 4px;
+    transition: width .4s;
+    min-width: 4px;
+}
+.chart-bar.green { background: var(--color-green); }
+.chart-bar.amber { background: var(--color-amber); }
+.chart-bar.red   { background: var(--color-red); }
+.chart-count {
+    width: 60px; font-size: 11px; font-weight: 600;
+    color: var(--color-text-secondary); flex-shrink: 0;
+}
