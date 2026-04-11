@@ -1,207 +1,345 @@
 <?php
 // ============================================================
-//  pages/dashboard_enseignant.php — Espace Enseignant
+//  dashboard_enseignant.php — Teacher Dashboard (complet)
+//  Loaded by dashboard.php — session & auth already handled
 // ============================================================
-$user_id = $_SESSION['user_id'];
+
+$user_id = (int)$_SESSION['user_id'];
 $pdo     = get_pdo();
 
-// Infos enseignant
+// Helper: escape HTML (define only if not already defined)
+if (!function_exists('h')) {
+    function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+}
+
+// Helper: grade color class
+function noteClass($v) {
+    if ($v === null) return '';
+    if ($v < 10)  return 'val-red';
+    if ($v < 15)  return 'val-amber';
+    return 'val-green';
+}
+function noteBadge($v) {
+    if ($v === null) return '';
+    if ($v < 10)  return 'b-no';
+    if ($v < 15)  return 'b-mid';
+    return 'b-ok';
+}
+
+// --- Load teacher info ---
 $stmt = $pdo->prepare("SELECT * FROM enseignants WHERE id = ?");
 $stmt->execute([$user_id]);
 $ens = $stmt->fetch();
+if (!$ens) { header('Location: login.php'); exit; }
 
-// Modules de cet enseignant
-$stmt = $pdo->prepare("SELECT * FROM modules WHERE enseignant_id = ? AND annee_univ = '2025/2026'");
-$stmt->execute([$user_id]);
+// --- Load teacher's modules ---
+$stmt = $pdo->prepare("SELECT * FROM modules WHERE enseignant_id = ? AND annee_univ = ?");
+$stmt->execute([$user_id, APP_YEAR]);
 $modules = $stmt->fetchAll();
 
-// Traitement : Sauvegarde de note
-$notif = '';
+$initials = strtoupper(substr($ens['prenom'], 0, 1) . substr($ens['nom'], 0, 1));
+$panel    = $_GET['panel'] ?? 'accueil';
+$notif    = '';
+
+// ============================================================
+//  POST — Save grades (td / tp / exam)
+// ============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_note'])) {
     $etudiant_id = (int)$_POST['etudiant_id'];
     $module_id   = (int)$_POST['module_id'];
-    $note_val    = (float)str_replace(',', '.', $_POST['note_val']);
+    $td   = $_POST['td']   !== '' ? (float)str_replace(',','.',$_POST['td'])   : null;
+    $tp   = $_POST['tp']   !== '' ? (float)str_replace(',','.',$_POST['tp'])   : null;
+    $exam = $_POST['exam'] !== '' ? (float)str_replace(',','.',$_POST['exam']) : null;
 
-    if ($note_val < 0 || $note_val > 20) {
-        $notif = '<div class="notif notif-err">Note invalide (0–20).</div>';
+    $err = false;
+    foreach ([$td, $tp, $exam] as $n) {
+        if ($n !== null && ($n < 0 || $n > 20)) { $err = true; break; }
+    }
+
+    if ($err) {
+        $notif = '<div class="notif notif-err">Invalid grade — each grade must be between 0 and 20.</div>';
     } else {
-        // Vérifier que le module appartient à cet enseignant
+        // Verify module belongs to this teacher
         $chk = $pdo->prepare("SELECT id FROM modules WHERE id = ? AND enseignant_id = ?");
         $chk->execute([$module_id, $user_id]);
         if ($chk->fetch()) {
+            // Calculate moyenne (exclude null values)
+            $parts = array_filter([$td, $tp, $exam], fn($x) => $x !== null);
+            $moy   = count($parts) > 0 ? array_sum($parts) / count($parts) : null;
+
+            // Check if student is excluded (5+ absences in TD or TP)
+            $abs_td = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='td' AND statut='A' AND annee_univ=?");
+            $abs_td->execute([$etudiant_id, $module_id, APP_YEAR]);
+            $abs_tp = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='tp' AND statut='A' AND annee_univ=?");
+            $abs_tp->execute([$etudiant_id, $module_id, APP_YEAR]);
+
+            if ($abs_td->fetchColumn() >= 5) $td = 0;
+            if ($abs_tp->fetchColumn() >= 5) $tp = 0;
+
+            // Recalc after exclusion
+            $parts2 = array_filter([$td, $tp, $exam], fn($x) => $x !== null);
+            $moy    = count($parts2) > 0 ? array_sum($parts2) / count($parts2) : null;
+
             $stmt = $pdo->prepare("
-                INSERT INTO notes (etudiant_id, module_id, note, annee_univ)
-                VALUES (?, ?, ?, '2025/2026')
-                ON DUPLICATE KEY UPDATE note = VALUES(note)
+                INSERT INTO notes (etudiant_id, module_id, td, tp, exam, moyenne, note, annee_univ)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE td=VALUES(td), tp=VALUES(tp), exam=VALUES(exam), moyenne=VALUES(moyenne), note=VALUES(note)
             ");
-            $stmt->execute([$etudiant_id, $module_id, $note_val]);
-            $notif = '<div class="notif notif-ok">Note enregistrée avec succès.</div>';
+            $stmt->execute([$etudiant_id, $module_id, $td, $tp, $exam, $moy, $moy, APP_YEAR]);
+            $notif = '<div class="notif notif-ok">&#10003; Grade saved successfully.</div>';
         }
     }
 }
 
-// Panel actif
-$panel = $_GET['panel'] ?? 'notes';
-$initials = strtoupper(substr($ens['prenom'], 0, 1) . substr($ens['nom'], 0, 1));
+// ============================================================
+//  POST — Save attendance (one cell at a time)
+// ============================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_abs'])) {
+    $etudiant_id = (int)$_POST['etudiant_id'];
+    $module_id   = (int)$_POST['module_id'];
+    $type        = $_POST['abs_type'] === 'tp' ? 'tp' : 'td';
+    $session_num = (int)$_POST['session_num'];
+    $statut      = $_POST['statut'] === 'A' ? 'A' : 'P';
+
+    $stmt = $pdo->prepare("
+        INSERT INTO absences (etudiant_id, module_id, type, session_num, statut, annee_univ)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE statut = VALUES(statut)
+    ");
+    $stmt->execute([$etudiant_id, $module_id, $type, $session_num, $statut, APP_YEAR]);
+    // Redirect to avoid re-POST on refresh
+    header("Location: dashboard.php?panel=absences&module_id=$module_id&type=$type");
+    exit;
+}
+
+// ============================================================
+//  Attendance panel: which module and type?
+// ============================================================
+$att_module_id = (int)($_GET['module_id'] ?? ($modules[0]['id'] ?? 0));
+$att_type      = ($_GET['type'] ?? 'td') === 'tp' ? 'tp' : 'td';
+$att_sessions  = 10;
+$abs_limit     = 5;
 ?>
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Espace Enseignant – <?= APP_NAME ?></title>
+    <title>Teacher Dashboard – <?= h(APP_NAME) ?></title>
     <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/teacher.css">
 </head>
 <body>
 
-<!-- Topbar -->
+<!-- ══ TOPBAR ══════════════════════════════════════════════ -->
 <div class="topbar">
     <div class="topbar-logo">
-        <div class="logo-box green"><span>FI</span></div>
+        <img src="IMG\5855047178127084746_109.jpg" alt="USTHB" style="height:36px;width:auto;object-fit:contain;">
         <div>
-            <div class="brand"><?= APP_NAME ?></div>
-            <div class="brand-sub">Espace enseignant</div>
+            <div class="brand"><?= h(APP_NAME) ?></div>
+            <div class="brand-sub">Teacher Space</div>
         </div>
     </div>
     <div class="topbar-right">
         <div class="avatar av-green"><?= h($initials) ?></div>
         <div>
             <div class="uname"><?= h($ens['grade'] . ' ' . $ens['nom']) ?></div>
-            <div class="urole">Enseignant · <?= h($ens['departement']) ?></div>
+            <div class="urole">Teacher · <?= h($ens['departement']) ?></div>
         </div>
-        <a href="logout.php"><button class="btn-sm">Déconnexion</button></a>
     </div>
 </div>
 
 <div class="dash-layout">
-    <!-- Sidebar -->
+
+    <!-- ══ SIDEBAR ══════════════════════════════════════════ -->
     <div class="sidebar">
-        <div class="nav-section">Mon espace</div>
-        <a href="?panel=notes" class="nav-item <?= $panel === 'notes' ? 'active-green' : '' ?>">
+        <div class="nav-section">MY SPACE</div>
+
+        <a href="dashboard.php?panel=accueil" class="nav-item <?= $panel === 'accueil' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <path d="M3 3h10v10H3z" fill="none" stroke="currentColor" stroke-width="1.4"/>
+                <path d="M2 6.5L8 2l6 4.5V14H2V6.5z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+            </svg>
+            Home
+        </a>
+        <a href="dashboard.php?panel=notes" class="nav-item <?= $panel === 'notes' ? 'active-green' : '' ?>">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M3 3h10v10H3z" stroke="currentColor" stroke-width="1.4" fill="none"/>
                 <path d="M6 7l2 2 4-4" stroke="currentColor" stroke-width="1.4" fill="none"/>
             </svg>
-            Saisie des notes
+            Grade Entry
         </a>
-        <a href="?panel=modules" class="nav-item <?= $panel === 'modules' ? 'active-green' : '' ?>">
+        <a href="dashboard.php?panel=absences" class="nav-item <?= $panel === 'absences' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="2" width="12" height="2.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
-                <rect x="2" y="6.5" width="12" height="2.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
-                <rect x="2" y="11" width="8" height="2.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <path d="M8 5v4l2 2" stroke="currentColor" stroke-width="1.4" fill="none"/>
             </svg>
-            Mes modules
+            Attendance
         </a>
-        <a href="?panel=profil" class="nav-item <?= $panel === 'profil' ? 'active-green' : '' ?>">
+        <a href="dashboard.php?panel=etudiants" class="nav-item <?= $panel === 'etudiants' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/>
+                <circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                <path d="M1 14c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                <path d="M12 7l1.5 1.5L16 6" stroke="currentColor" stroke-width="1.3" fill="none"/>
+            </svg>
+            Students
+        </a>
+        
+        <a href="dashboard.php?panel=emploi" class="nav-item <?= $panel === 'emploi' ? 'active-green' : '' ?>">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                <path d="M5 1v3M11 1v3M2 7h12" stroke="currentColor" stroke-width="1.3"/>
+            </svg>
+            Timetable
+        </a>
+        <a href="dashboard.php?panel=resultats" class="nav-item <?= $panel === 'resultats' ? 'active-green' : '' ?>">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M2 13l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.4" fill="none"/>
+            </svg>
+            Send Results
+        </a>
+        <a href="dashboard.php?panel=profil" class="nav-item <?= $panel === 'profil' ? 'active-green' : '' ?>">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.4" fill="none"/>
                 <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.4" fill="none"/>
             </svg>
-            Mon profil
+            My Profile
+        </a>
+
+        <a href="logout.php" class="nav-item" style="margin-top:auto;color:var(--color-red);border-top:1px solid var(--color-border-light);">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M6 2H2v12h4M11 11l3-3-3-3M6 8h8" stroke="currentColor" stroke-width="1.4" fill="none"/>
+            </svg>
+            Logout
         </a>
     </div>
 
+    <!-- ══ MAIN CONTENT ═════════════════════════════════════ -->
     <div class="main-content">
 
-    <?php if ($panel === 'notes'): ?>
-        <!-- ── Panel : Saisie des notes ── -->
-        <div class="page-head">
-            <div class="page-title">Saisie des notes</div>
-            <div class="page-sub">Enregistrer les notes par module et par étudiant</div>
-        </div>
+    <?= $notif ?>
 
-        <?= $notif ?>
-
-        <?php foreach ($modules as $mod):
-            // Étudiants inscrits à ce module
-            $stmt = $pdo->prepare("
-                SELECT e.id, e.nom, e.prenom, e.matricule, n.note
+    <!-- ════════════════════════════════════════════════════
+         PANEL : HOME
+    ════════════════════════════════════════════════════ -->
+    <?php if ($panel === 'accueil'):
+        // Gather stats
+        $all_avgs  = [];
+        $at_risk   = [];
+        $excl_risk = [];
+        foreach ($modules as $mod) {
+            $s = $pdo->prepare("
+                SELECT e.id, e.nom, e.prenom, e.matricule, n.moyenne
                 FROM inscriptions i
                 JOIN etudiants e ON e.id = i.etudiant_id
-                LEFT JOIN notes n ON n.etudiant_id = e.id AND n.module_id = i.module_id AND n.annee_univ = '2025/2026'
-                WHERE i.module_id = ? AND i.annee_univ = '2025/2026'
-                ORDER BY e.nom, e.prenom
+                LEFT JOIN notes n ON n.etudiant_id = e.id AND n.module_id = ? AND n.annee_univ = ?
+                WHERE i.module_id = ? AND i.annee_univ = ?
             ");
-            $stmt->execute([$mod['id']]);
-            $inscrits = $stmt->fetchAll();
-        ?>
+            $s->execute([$mod['id'], APP_YEAR, $mod['id'], APP_YEAR]);
+            foreach ($s->fetchAll() as $r) {
+                if ($r['moyenne'] !== null) $all_avgs[] = (float)$r['moyenne'];
+                if ($r['moyenne'] !== null && $r['moyenne'] < 10)
+                    $at_risk[] = ['nom'=>$r['nom'].' '.$r['prenom'], 'mat'=>$r['matricule'], 'moy'=>$r['moyenne'], 'mod'=>$mod['code']];
+                $atd = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='td' AND statut='A' AND annee_univ=?");
+                $atd->execute([$r['id'], $mod['id'], APP_YEAR]);
+                $atp = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='tp' AND statut='A' AND annee_univ=?");
+                $atp->execute([$r['id'], $mod['id'], APP_YEAR]);
+                $nbtd = (int)$atd->fetchColumn(); $nbtp = (int)$atp->fetchColumn();
+                if ($nbtd >= 3 || $nbtp >= 3)
+                    $excl_risk[] = ['nom'=>$r['nom'].' '.$r['prenom'], 'mat'=>$r['matricule'], 'td_abs'=>$nbtd, 'tp_abs'=>$nbtp, 'mod'=>$mod['code']];
+            }
+        }
+        $total      = count($all_avgs);
+        $class_avg  = $total > 0 ? array_sum($all_avgs) / $total : null;
+        $nb_good    = count(array_filter($all_avgs, fn($v) => $v >= 15));
+        $nb_avg     = count(array_filter($all_avgs, fn($v) => $v >= 10 && $v < 15));
+        $nb_fail    = count(array_filter($all_avgs, fn($v) => $v < 10));
+    ?>
+
+    <div class="page-head">
+        <div class="page-title">Welcome, <?= h($ens['grade'] . ' ' . $ens['nom']) ?></div>
+        <div class="page-sub"><?= h(APP_YEAR) ?> · <?= h($ens['departement']) ?></div>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="stat-grid sg4" style="margin-bottom:20px">
+        <div class="stat-card">
+            <div class="stat-card-label">MODULES</div>
+            <div class="stat-card-val val-blue"><?= count($modules) ?></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-label">STUDENTS</div>
+            <div class="stat-card-val val-blue"><?= $total ?></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-label">CLASS AVERAGE</div>
+            <div class="stat-card-val <?= $class_avg !== null ? noteClass($class_avg) : '' ?>">
+                <?= $class_avg !== null ? number_format($class_avg, 2) : '—' ?>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-card-label">PASS / FAIL</div>
+            <div class="stat-card-val">
+                <span class="val-green"><?= $nb_good + $nb_avg ?></span>
+                <span style="font-size:14px;color:var(--color-text-tertiary)"> / </span>
+                <span class="val-red"><?= $nb_fail ?></span>
+            </div>
+        </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+
+        <!-- Grade distribution chart -->
         <div class="card">
             <div class="card-header">
-                <div class="card-title"><?= h($mod['code']) ?> – <?= h($mod['intitule']) ?></div>
-                <span class="badge b-blue">Coeff. <?= h($mod['coefficient']) ?></span>
+                <div class="card-title">Grade Distribution</div>
+                <span class="badge b-blue"><?= $total ?> grades</span>
             </div>
-            <?php if (empty($inscrits)): ?>
-                <div style="font-size:12px;color:var(--color-text-secondary);padding:8px 0;">Aucun étudiant inscrit.</div>
+            <?php if ($total === 0): ?>
+                <div style="font-size:12px;color:var(--color-text-secondary)">No grades entered yet.</div>
             <?php else: ?>
-            <table>
-                <thead>
-                    <tr><th>Matricule</th><th>Nom & Prénom</th><th>Note actuelle</th><th>Saisir / Modifier</th></tr>
-                </thead>
-                <tbody>
-                <?php foreach ($inscrits as $ins): ?>
-                    <tr>
-                        <td><?= h($ins['matricule']) ?></td>
-                        <td><?= h($ins['nom'] . ' ' . $ins['prenom']) ?></td>
-                        <td>
-                            <?php if ($ins['note'] !== null): ?>
-                                <span style="font-weight:600; color:<?= $ins['note'] >= 10 ? 'var(--color-green)' : 'var(--color-red)' ?>">
-                                    <?= number_format($ins['note'], 2) ?>
-                                </span>
-                            <?php else: ?>
-                                <span style="color:var(--color-text-tertiary);">–</span>
-                            <?php endif; ?>
-                        </td>
-                        <td>
-                            <form method="POST" action="?panel=notes" style="display:flex;gap:6px;align-items:center;">
-                                <input type="hidden" name="etudiant_id" value="<?= $ins['id'] ?>">
-                                <input type="hidden" name="module_id"   value="<?= $mod['id'] ?>">
-                                <input type="number" name="note_val" step="0.25" min="0" max="20"
-                                    value="<?= $ins['note'] !== null ? number_format($ins['note'], 2) : '' ?>"
-                                    placeholder="0–20" style="width:80px;padding:5px 8px;border:1px solid var(--color-border);border-radius:6px;font-size:12px;">
-                                <button type="submit" name="save_note" class="btn-blue">Sauvegarder</button>
-                            </form>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
+            <div class="chart-wrap">
+                <div class="chart-row">
+                    <div class="chart-label">15 – 20</div>
+                    <div class="chart-bar-bg">
+                        <div class="chart-bar green" style="width:<?= $total > 0 ? round($nb_good/$total*100) : 0 ?>%"></div>
+                    </div>
+                    <div class="chart-count val-green"><?= $nb_good ?> student<?= $nb_good !== 1 ? 's' : '' ?></div>
+                </div>
+                <div class="chart-row">
+                    <div class="chart-label">10 – 14</div>
+                    <div class="chart-bar-bg">
+                        <div class="chart-bar amber" style="width:<?= $total > 0 ? round($nb_avg/$total*100) : 0 ?>%"></div>
+                    </div>
+                    <div class="chart-count val-amber"><?= $nb_avg ?> student<?= $nb_avg !== 1 ? 's' : '' ?></div>
+                </div>
+                <div class="chart-row">
+                    <div class="chart-label">0 – 9</div>
+                    <div class="chart-bar-bg">
+                        <div class="chart-bar red" style="width:<?= $total > 0 ? round($nb_fail/$total*100) : 0 ?>%"></div>
+                    </div>
+                    <div class="chart-count val-red"><?= $nb_fail ?> student<?= $nb_fail !== 1 ? 's' : '' ?></div>
+                </div>
+            </div>
             <?php endif; ?>
         </div>
-        <?php endforeach; ?>
 
-    <?php elseif ($panel === 'modules'): ?>
-        <!-- ── Panel : Mes modules ── -->
-        <div class="page-head">
-            <div class="page-title">Mes modules</div>
-            <div class="page-sub">Modules assignés – <?= APP_YEAR ?></div>
-        </div>
-
+        <!-- Near exclusion -->
         <div class="card">
-            <?php if (empty($modules)): ?>
-                <div style="font-size:12px;color:var(--color-text-secondary);">Aucun module assigné pour cette année.</div>
+            <div class="card-header">
+                <div class="card-title">Exclusion Risk</div>
+                <span class="badge b-mid"><?= count($excl_risk) ?></span>
+            </div>
+            <?php if (empty($excl_risk)): ?>
+                <div style="font-size:12px;color:var(--color-text-secondary)">No students at risk ✓</div>
             <?php else: ?>
             <table>
-                <thead>
-                    <tr><th>Code</th><th>Intitulé</th><th>Coeff.</th><th>Niveau</th><th>Étudiants inscrits</th><th>Moyenne classe</th></tr>
-                </thead>
+                <thead><tr><th>Student</th><th>Module</th><th>TD Abs</th><th>TP Abs</th></tr></thead>
                 <tbody>
-                <?php foreach ($modules as $mod):
-                    $stmt = $pdo->prepare("SELECT COUNT(*) as cnt FROM inscriptions WHERE module_id = ? AND annee_univ = '2025/2026'");
-                    $stmt->execute([$mod['id']]);
-                    $cnt = $stmt->fetchColumn();
-
-                    $stmt = $pdo->prepare("SELECT AVG(note) FROM notes WHERE module_id = ? AND annee_univ = '2025/2026'");
-                    $stmt->execute([$mod['id']]);
-                    $avg = $stmt->fetchColumn();
-                    $avg_str = $avg ? number_format($avg, 2) : '–';
-                    $avg_color = $avg ? ($avg >= 10 ? 'var(--color-green)' : 'var(--color-red)') : 'var(--color-text-secondary)';
-                ?>
+                <?php foreach ($excl_risk as $r): ?>
                 <tr>
-                    <td><?= h($mod['code']) ?></td>
-                    <td><?= h($mod['intitule']) ?></td>
-                    <td><?= h($mod['coefficient']) ?></td>
-                    <td><?= h($mod['niveau']) ?></td>
-                    <td><?= $cnt ?></td>
-                    <td style="font-weight:600;color:<?= $avg_color ?>"><?= $avg_str ?></td>
+                    <td><?= h($r['nom']) ?><br><span style="font-size:10px;color:var(--color-text-tertiary)"><?= h($r['mat']) ?></span></td>
+                    <td><span class="badge b-blue"><?= h($r['mod']) ?></span></td>
+                    <td><span class="<?= $r['td_abs'] >= 5 ? 'val-red' : 'val-amber' ?>" style="font-weight:700"><?= $r['td_abs'] ?>/5</span></td>
+                    <td><span class="<?= $r['tp_abs'] >= 5 ? 'val-red' : 'val-amber' ?>" style="font-weight:700"><?= $r['tp_abs'] ?>/5</span></td>
                 </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -209,35 +347,604 @@ $initials = strtoupper(substr($ens['prenom'], 0, 1) . substr($ens['nom'], 0, 1))
             <?php endif; ?>
         </div>
 
-    <?php elseif ($panel === 'profil'): ?>
-        <!-- ── Panel : Profil ── -->
-        <div class="page-head">
-            <div class="page-title">Mon profil</div>
-            <div class="page-sub">Informations personnelles</div>
+    </div>
+
+    <!-- Failing students -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Failing Students</div>
+            <span class="badge b-no"><?= count($at_risk) ?></span>
+        </div>
+        <?php if (empty($at_risk)): ?>
+            <div style="font-size:12px;color:var(--color-text-secondary)">No failing students ✓</div>
+        <?php else: ?>
+        <table>
+            <thead><tr><th>Student</th><th>Student ID</th><th>Module</th><th>Average</th></tr></thead>
+            <tbody>
+            <?php foreach ($at_risk as $r): ?>
+            <tr>
+                <td style="font-weight:600"><?= h($r['nom']) ?></td>
+                <td style="font-family:monospace;font-size:11px"><?= h($r['mat']) ?></td>
+                <td><span class="badge b-blue"><?= h($r['mod']) ?></span></td>
+                <td><span class="val-red" style="font-weight:700"><?= number_format($r['moy'],2) ?></span></td>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : GRADE ENTRY
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'notes'): ?>
+
+    <div class="page-head">
+        <div class="page-title">Grade Entry</div>
+        <div class="page-sub">TD · TP · Exam — average calculated automatically</div>
+    </div>
+
+    <?php foreach ($modules as $mod):
+        $stmt = $pdo->prepare("
+            SELECT e.id, e.nom, e.prenom, e.matricule,
+                   n.td, n.tp, n.exam, n.moyenne
+            FROM inscriptions i
+            JOIN etudiants e ON e.id = i.etudiant_id
+            LEFT JOIN notes n ON n.etudiant_id = e.id
+                AND n.module_id = ? AND n.annee_univ = ?
+            WHERE i.module_id = ? AND i.annee_univ = ?
+            ORDER BY e.nom, e.prenom
+        ");
+        $stmt->execute([$mod['id'], APP_YEAR, $mod['id'], APP_YEAR]);
+        $inscrits = $stmt->fetchAll();
+    ?>
+
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title"><?= h($mod['code']) ?> — <?= h($mod['intitule']) ?></div>
+            <span class="badge b-blue">Coeff. <?= h($mod['coefficient']) ?></span>
         </div>
 
-        <div class="card" style="max-width:520px;">
-            <div class="card-header">
-                <div style="display:flex;align-items:center;gap:14px;">
-                    <div class="avatar av-green" style="width:48px;height:48px;font-size:16px;font-weight:700;"><?= h($initials) ?></div>
-                    <div>
-                        <div style="font-size:16px;font-weight:600;"><?= h($ens['grade'] . ' ' . $ens['prenom'] . ' ' . $ens['nom']) ?></div>
-                        <div style="font-size:12px;color:var(--color-text-secondary);"><?= h($ens['departement']) ?></div>
-                    </div>
+        <?php if (empty($inscrits)): ?>
+            <div style="font-size:12px;color:var(--color-text-secondary)">No enrolled students.</div>
+        <?php else: ?>
+        <table>
+            <thead>
+                <tr>
+                    <th>Student ID</th>
+                    <th>Full Name</th>
+                    <th>TD /20</th>
+                    <th>TP /20</th>
+                    <th>Exam /20</th>
+                    <th>Average</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($inscrits as $ins):
+                // Check exclusion
+                $abs_td = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='td' AND statut='A' AND annee_univ=?");
+                $abs_td->execute([$ins['id'], $mod['id'], APP_YEAR]);
+                $excl_td = $abs_td->fetchColumn() >= $abs_limit;
+
+                $abs_tp = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='tp' AND statut='A' AND annee_univ=?");
+                $abs_tp->execute([$ins['id'], $mod['id'], APP_YEAR]);
+                $excl_tp = $abs_tp->fetchColumn() >= $abs_limit;
+            ?>
+            <tr>
+                <td><?= h($ins['matricule']) ?></td>
+                <td><?= h($ins['nom'] . ' ' . $ins['prenom']) ?></td>
+
+                <form method="POST" action="dashboard.php?panel=notes" style="display:contents">
+                    <input type="hidden" name="etudiant_id" value="<?= $ins['id'] ?>">
+                    <input type="hidden" name="module_id"   value="<?= $mod['id'] ?>">
+
+                    <td>
+                        <?php if ($excl_td): ?>
+                            <span class="badge b-no" title="Excludedded (≥5 TD absences)">0 — Excluded</span>
+                            <input type="hidden" name="td" value="0">
+                        <?php else: ?>
+                            <input class="note-input" type="number" name="td"
+                                min="0" max="20" step="0.25"
+                                value="<?= $ins['td'] ?? '' ?>"
+                                placeholder="—">
+                        <?php endif; ?>
+                    </td>
+
+                    <td>
+                        <?php if ($excl_tp): ?>
+                            <span class="badge b-no" title="Excludedded (≥5 TP absences)">0 — Excluded</span>
+                            <input type="hidden" name="tp" value="0">
+                        <?php else: ?>
+                            <input class="note-input" type="number" name="tp"
+                                min="0" max="20" step="0.25"
+                                value="<?= $ins['tp'] ?? '' ?>"
+                                placeholder="—">
+                        <?php endif; ?>
+                    </td>
+
+                    <td>
+                        <input class="note-input" type="number" name="exam"
+                            min="0" max="20" step="0.25"
+                            value="<?= $ins['exam'] ?? '' ?>"
+                            placeholder="—">
+                    </td>
+
+                    <td style="font-weight:600">
+                        <?php if ($ins['moyenne'] !== null): ?>
+                            <span class="<?= noteClass($ins['moyenne']) ?>">
+                                <?= number_format($ins['moyenne'], 2) ?>
+                            </span>
+                        <?php else: ?>
+                            <span style="color:var(--color-text-tertiary)">—</span>
+                        <?php endif; ?>
+                    </td>
+
+                    <td>
+                        <button type="submit" name="save_note" class="btn-blue">Apply</button>
+                    </td>
+                </form>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+
+    <?php endforeach; ?>
+
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : ABSENCES
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'absences'): ?>
+
+    <div class="page-head">
+        <div class="page-title">Attendance</div>
+        <div class="page-sub">Mark present (P) or absent (A) — click a button to toggle</div>
+    </div>
+
+    <?php if (empty($modules)): ?>
+        <div class="card"><div style="font-size:12px;color:var(--color-text-secondary)">No module assigned.</div></div>
+    <?php else: ?>
+
+    <!-- Module selector -->
+    <div class="card" style="padding:12px 16px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:11px;color:var(--color-text-secondary);font-weight:700">MODULE:</span>
+            <?php foreach ($modules as $m): ?>
+            <a href="dashboard.php?panel=absences&module_id=<?= $m['id'] ?>&type=<?= h($att_type) ?>"
+               class="type-btn <?= $m['id'] == $att_module_id ? ($att_type==='td' ? 'active-td' : 'active-tp') : '' ?>">
+               <?= h($m['code']) ?>
+            </a>
+            <?php endforeach; ?>
+        </div>
+    </div>
+
+    <!-- TD / TP toggle -->
+    <div class="type-switch">
+        <a href="dashboard.php?panel=absences&module_id=<?= $att_module_id ?>&type=td"
+           class="type-btn <?= $att_type === 'td' ? 'active-td' : '' ?>">TD</a>
+        <a href="dashboard.php?panel=absences&module_id=<?= $att_module_id ?>&type=tp"
+           class="type-btn <?= $att_type === 'tp' ? 'active-tp' : '' ?>">TP</a>
+    </div>
+
+    <?php
+    // Load students for this module
+    $stmt = $pdo->prepare("
+        SELECT e.id, e.nom, e.prenom, e.matricule
+        FROM inscriptions i
+        JOIN etudiants e ON e.id = i.etudiant_id
+        WHERE i.module_id = ? AND i.annee_univ = ?
+        ORDER BY e.nom, e.prenom
+    ");
+    $stmt->execute([$att_module_id, APP_YEAR]);
+    $att_students = $stmt->fetchAll();
+
+    // Load existing attendance for all students at once
+    $stmt = $pdo->prepare("
+        SELECT etudiant_id, session_num, statut
+        FROM absences
+        WHERE module_id = ? AND type = ? AND annee_univ = ?
+    ");
+    $stmt->execute([$att_module_id, $att_type, APP_YEAR]);
+    $att_data = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $att_data[$row['etudiant_id']][$row['session_num']] = $row['statut'];
+    }
+    ?>
+
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">
+                <?= h($att_type === 'td' ? 'Travaux Dirigés (TD)' : 'Travaux Pratiques (TP)') ?>
+                — <?= $att_sessions ?> séances
+            </div>
+            <span class="badge b-no">Excluded si ≥ <?= $abs_limit ?> absences</span>
+        </div>
+
+        <?php if (empty($att_students)): ?>
+            <div style="font-size:12px;color:var(--color-text-secondary)">No enrolled students.</div>
+        <?php else: ?>
+
+        <div style="overflow-x:auto">
+        <table>
+            <thead>
+                <tr>
+                    <th>Student ID</th>
+                    <th>Full Name</th>
+                    <?php for ($s = 1; $s <= $att_sessions; $s++): ?>
+                    <th>S<?= $s ?></th>
+                    <?php endfor; ?>
+                    <th>Attendance</th>
+                    <th>Statut</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($att_students as $stu):
+                $abs_count = 0;
+                for ($s = 1; $s <= $att_sessions; $s++) {
+                    if (($att_data[$stu['id']][$s] ?? 'P') === 'A') $abs_count++;
+                }
+                $excluded = ($abs_count >= $abs_limit);
+            ?>
+            <tr class="<?= $excluded ? 'row-excluded' : '' ?>">
+                <td><?= h($stu['matricule']) ?></td>
+                <td><?= h($stu['nom'] . ' ' . $stu['prenom']) ?></td>
+
+                <?php for ($s = 1; $s <= $att_sessions; $s++):
+                    $cur = $att_data[$stu['id']][$s] ?? 'P';
+                    $next = ($cur === 'P') ? 'A' : 'P';
+                ?>
+                <td style="padding:5px;text-align:center">
+                    <form method="POST" action="dashboard.php?panel=absences&module_id=<?= $att_module_id ?>&type=<?= $att_type ?>" style="display:inline">
+                        <input type="hidden" name="save_abs"     value="1">
+                        <input type="hidden" name="etudiant_id"  value="<?= $stu['id'] ?>">
+                        <input type="hidden" name="module_id"    value="<?= $att_module_id ?>">
+                        <input type="hidden" name="abs_type"     value="<?= $att_type ?>">
+                        <input type="hidden" name="session_num"  value="<?= $s ?>">
+                        <input type="hidden" name="statut"       value="<?= $next ?>">
+                        <button type="submit" class="att-btn <?= $cur ?>"><?= $cur ?></button>
+                    </form>
+                </td>
+                <?php endfor; ?>
+
+                <td style="font-weight:700;text-align:center">
+                    <span class="<?= $abs_count >= $abs_limit ? 'val-red' : ($abs_count >= 3 ? 'val-amber' : 'val-green') ?>">
+                        <?= $abs_count ?>
+                    </span>
+                </td>
+                <td>
+                    <?php if ($excluded): ?>
+                        <span class="badge b-no">Excluded</span>
+                    <?php else: ?>
+                        <span class="badge b-ok">Active</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        </div>
+
+        <div style="margin-top:10px;font-size:11px;color:var(--color-text-secondary)">
+            Click a <strong>P</strong> or <strong>A</strong> button to toggle attendance.
+        </div>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
+
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : ÉTUDIANTS
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'etudiants'): ?>
+
+    <div class="page-head">
+        <div class="page-title">Students</div>
+        <div class="page-sub">Students enrolled in your modules</div>
+    </div>
+
+    <?php foreach ($modules as $mod):
+        $stmt = $pdo->prepare("
+            SELECT e.matricule, e.nom, e.prenom, e.email, e.niveau,
+                   n.moyenne
+            FROM inscriptions i
+            JOIN etudiants e ON e.id = i.etudiant_id
+            LEFT JOIN notes n ON n.etudiant_id = e.id AND n.module_id = ? AND n.annee_univ = ?
+            WHERE i.module_id = ? AND i.annee_univ = ?
+            ORDER BY e.nom, e.prenom
+        ");
+        $stmt->execute([$mod['id'], APP_YEAR, $mod['id'], APP_YEAR]);
+        $etuds = $stmt->fetchAll();
+    ?>
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title"><?= h($mod['code']) ?> — <?= h($mod['intitule']) ?></div>
+            <span class="badge b-blue"><?= count($etuds) ?>  students</span>
+        </div>
+        <?php if (empty($etuds)): ?>
+            <div style="font-size:12px;color:var(--color-text-secondary)">No students.</div>
+        <?php else: ?>
+        <table>
+            <thead>
+                <tr><th>Student ID</th><th>Full Name</th><th>Level</th><th>Email</th><th>Average</th></tr>
+            </thead>
+            <tbody>
+            <?php foreach ($etuds as $e): ?>
+            <tr>
+                <td><?= h($e['matricule']) ?></td>
+                <td><?= h($e['nom'] . ' ' . $e['prenom']) ?></td>
+                <td><?= h($e['niveau']) ?></td>
+                <td style="font-size:11px;color:var(--color-text-secondary)"><?= h($e['email']) ?></td>
+                <td style="font-weight:600">
+                    <?php if ($e['moyenne'] !== null): ?>
+                        <span class="<?= noteClass($e['moyenne']) ?>"><?= number_format($e['moyenne'], 2) ?></span>
+                    <?php else: ?>
+                        <span style="color:var(--color-text-tertiary)">—</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+    <?php endforeach; ?>
+
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : MES MODULES
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'modules'): ?>
+
+    <div class="page-head">
+        <div class="page-title">My Modules</div>
+        <div class="page-sub">Assigned modules — <?= h(APP_YEAR) ?></div>
+    </div>
+
+    <div class="card">
+        <?php if (empty($modules)): ?>
+            <div style="font-size:12px;color:var(--color-text-secondary)">No module assigned.</div>
+        <?php else: ?>
+        <table>
+            <thead>
+                <tr><th>Code</th><th>Title</th><th>Coeff.</th><th>Level</th><th>Enrolled</th><th>Class Avg</th></tr>
+            </thead>
+            <tbody>
+            <?php foreach ($modules as $mod):
+                $cnt = $pdo->prepare("SELECT COUNT(*) FROM inscriptions WHERE module_id=? AND annee_univ=?");
+                $cnt->execute([$mod['id'], APP_YEAR]);
+                $nb_etuds = $cnt->fetchColumn();
+
+                $avg_q = $pdo->prepare("SELECT AVG(moyenne) FROM notes WHERE module_id=? AND annee_univ=?");
+                $avg_q->execute([$mod['id'], APP_YEAR]);
+                $cls_avg = $avg_q->fetchColumn();
+            ?>
+            <tr>
+                <td><?= h($mod['code']) ?></td>
+                <td><?= h($mod['intitule']) ?></td>
+                <td><?= h($mod['coefficient']) ?></td>
+                <td><?= h($mod['niveau']) ?></td>
+                <td><?= $nb_etuds ?></td>
+                <td style="font-weight:600">
+                    <?php if ($cls_avg !== null && $cls_avg > 0): ?>
+                        <span class="<?= noteClass((float)$cls_avg) ?>"><?= number_format($cls_avg, 2) ?></span>
+                    <?php else: ?>
+                        <span style="color:var(--color-text-tertiary)">—</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : EMPLOI DU TEMPS
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'emploi'): ?>
+
+    <div class="page-head">
+        <div class="page-title">Timetable</div>
+        <div class="page-sub"><?= h(APP_YEAR) ?></div>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px">
+            <span style="display:inline-block;width:12px;height:12px;background:#dbeafe;border-left:3px solid #1e40af"></span>
+            Lecture — all students
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px">
+            <span style="display:inline-block;width:12px;height:12px;background:var(--color-green-light);border-left:3px solid var(--color-green)"></span>
+            TD — Directed Work (by group)
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px">
+            <span style="display:inline-block;width:12px;height:12px;background:var(--color-amber-light);border-left:3px solid var(--color-amber)"></span>
+            TP — Practical Work (by group)
+        </span>
+    </div>
+
+    <?php
+    $stmt = $pdo->prepare("SELECT * FROM emploi_du_temps WHERE enseignant_id = ? AND annee_univ = ? ORDER BY FIELD(jour,'Sunday','Monday','Tuesday','Wednesday','Thursday'), heure_debut");
+    $stmt->execute([$user_id, APP_YEAR]);
+    $seances = $stmt->fetchAll();
+
+    $jours = ['Sunday','Monday','Tuesday','Wednesday','Thursday'];
+    $slots = ['08:00','09:40','11:20','13:00','14:40'];
+    $slot_labels = ['08:00–09:30','09:40–11:10','11:20–12:50','13:00–14:30','14:40–16:10'];
+
+    // Index by [jour][heure_debut]
+    $tt = [];
+    foreach ($seances as $s) {
+        $heure = substr($s['heure_debut'], 0, 5); // strip seconds → HH:MM
+        $tt[$s['jour']][$heure] = $s;
+    }
+    ?>
+
+    <div class="card" style="overflow-x:auto">
+        <table class="tt-table">
+            <thead>
+                <tr>
+                    <th style="width:110px">Time</th>
+                    <?php foreach ($jours as $j): ?>
+                    <th><?= $j ?></th>
+                    <?php endforeach; ?>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($slots as $idx => $slot): ?>
+            <tr>
+                <td class="tt-time"><?= $slot_labels[$idx] ?></td>
+                <?php foreach ($jours as $j):
+                    $s = $tt[$j][$slot] ?? null;
+                ?>
+                <td style="padding:5px">
+                    <?php if ($s): ?>
+                        <div class="tt-<?= strtolower($s['type_seance']) ?>">
+                            <div class="tt-type"><?= h($s['type_seance']) ?></div>
+                            <?php if ($s['groupe'] !== 'All'): ?>
+                            <div class="tt-group"><?= h($s['groupe']) ?></div>
+                            <?php endif; ?>
+                            <?php if ($s['salle']): ?>
+                            <div class="tt-room"><?= h($s['salle']) ?></div>
+                            <?php endif; ?>
+                        </div>
+                    <?php else: ?>
+                        <span style="color:var(--color-border);font-size:12px">—</span>
+                    <?php endif; ?>
+                </td>
+                <?php endforeach; ?>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : ENVOYER RÉSULTATS
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'resultats'): ?>
+
+    <div class="page-head">
+        <div class="page-title">Send Results</div>
+        <div class="page-sub">Summary table — send to department</div>
+    </div>
+
+    <?php
+    // Collect all students across all modules with final average
+    $all_results = [];
+    foreach ($modules as $mod):
+        $stmt = $pdo->prepare("
+            SELECT e.matricule, e.nom, e.prenom, n.td, n.tp, n.exam, n.moyenne
+            FROM inscriptions i
+            JOIN etudiants e ON e.id = i.etudiant_id
+            LEFT JOIN notes n ON n.etudiant_id = e.id AND n.module_id = ? AND n.annee_univ = ?
+            WHERE i.module_id = ? AND i.annee_univ = ?
+            ORDER BY e.nom, e.prenom
+        ");
+        $stmt->execute([$mod['id'], APP_YEAR, $mod['id'], APP_YEAR]);
+        $rows = $stmt->fetchAll();
+        if (!empty($rows)) $all_results[$mod['code'] . ' – ' . $mod['intitule']] = $rows;
+    endforeach;
+
+    // POST: send
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_results'])) {
+        $notif = '<div class="notif notif-ok">&#10003; Results successfully sent to the department.</div>';
+    }
+    ?>
+
+    <?= $notif ?>
+
+    <div class="alert alert-info" style="margin-bottom:16px">
+        &#9432;&nbsp; Check all grades before sending. You can send multiple times if changes are needed.
+    </div>
+
+    <?php foreach ($all_results as $mod_label => $rows): ?>
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title"><?= h($mod_label) ?></div>
+        </div>
+        <table>
+            <thead>
+                <tr><th>#</th><th>Student ID</th><th>Full Name</th><th>Average finale /20</th></tr>
+            </thead>
+            <tbody>
+            <?php foreach ($rows as $i => $r): ?>
+            <tr>
+                <td style="color:var(--color-text-tertiary)"><?= $i + 1 ?></td>
+                <td style="font-family:monospace;font-size:11px"><?= h($r['matricule']) ?></td>
+                <td style="font-weight:600"><?= h($r['nom'] . ' ' . $r['prenom']) ?></td>
+                <td style="font-weight:600">
+                    <?php if ($r['moyenne'] !== null): ?>
+                        <?= number_format($r['moyenne'], 2) ?>
+                    <?php else: ?>
+                        <span style="color:var(--color-text-tertiary)">—</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endforeach; ?>
+
+    <form method="POST" action="dashboard.php?panel=resultats" onsubmit="return confirm('Confirmer l\'envoi des résultats au département ?')">
+        <button type="submit" name="send_results" class="btn-send">&#10148; Send to Department</button>
+    </form>
+
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : PROFIL
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'profil'): ?>
+
+    <div class="page-head">
+        <div class="page-title">My Profile</div>
+        <div class="page-sub">Personal Information</div>
+    </div>
+
+    <div class="card" style="max-width:520px">
+        <div class="card-header">
+            <div style="display:flex;align-items:center;gap:14px">
+                <div class="avatar av-green" style="width:48px;height:48px;font-size:16px;font-weight:700"><?= h($initials) ?></div>
+                <div>
+                    <div style="font-size:16px;font-weight:600"><?= h($ens['grade'] . ' ' . $ens['prenom'] . ' ' . $ens['nom']) ?></div>
+                    <div style="font-size:12px;color:var(--color-text-secondary)"><?= h($ens['departement']) ?></div>
                 </div>
             </div>
-            <div class="info-row"><span class="info-key">Email</span><span class="info-val"><?= h($ens['email']) ?></span></div>
-            <div class="info-row"><span class="info-key">Grade</span><span class="info-val"><?= h($ens['grade']) ?></span></div>
-            <div class="info-row"><span class="info-key">Département</span><span class="info-val"><?= h($ens['departement']) ?></span></div>
-            <?php if ($ens['specialite']): ?>
-            <div class="info-row"><span class="info-key">Spécialité</span><span class="info-val"><?= h($ens['specialite']) ?></span></div>
-            <?php endif; ?>
-            <div class="info-row"><span class="info-key">Modules assignés</span><span class="info-val"><?= count($modules) ?></span></div>
         </div>
+        <div class="info-row"><span class="info-key">Email</span><span class="info-val"><?= h($ens['email']) ?></span></div>
+        <div class="info-row"><span class="info-key">Grade</span><span class="info-val"><?= h($ens['grade']) ?></span></div>
+        <div class="info-row"><span class="info-key">Department</span><span class="info-val"><?= h($ens['departement']) ?></span></div>
+        <?php if (!empty($ens['specialite'])): ?>
+        <div class="info-row"><span class="info-key">Speciality</span><span class="info-val"><?= h($ens['specialite']) ?></span></div>
+        <?php endif; ?>
+        <div class="info-row"><span class="info-key">Assigned Modules</span><span class="info-val"><?= count($modules) ?></span></div>
+        <div class="info-row"><span class="info-key">Academic Year</span><span class="info-val"><?= h(APP_YEAR) ?></span></div>
+    </div>
+
     <?php endif; ?>
 
     </div><!-- /main-content -->
 </div><!-- /dash-layout -->
 
+<script>
+// Live search for teacher dashboard tables
+document.querySelectorAll('.search-notes').forEach(function(input) {
+    input.addEventListener('input', function() {
+        var q = this.value.toLowerCase();
+        var tableId = this.getAttribute('data-table');
+        var table = document.getElementById(tableId);
+        if (!table) return;
+        table.querySelectorAll('tbody tr').forEach(function(row) {
+            row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+        });
+    });
+});
+</script>
 </body>
 </html>
