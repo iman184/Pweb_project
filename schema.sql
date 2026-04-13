@@ -125,3 +125,63 @@ VALUES
     (1,1,18.00,'2025/2026'),(1,2,12.50,'2025/2026'),(1,3,15.00,'2025/2026'),(1,4,9.50,'2025/2026'),
     (2,1,14.00,'2025/2026'),(2,2, 8.00,'2025/2026'),(2,3,11.00,'2025/2026'),
     (3,1,16.00,'2025/2026'),(3,3,13.00,'2025/2026'),(3,4,10.00,'2025/2026');
+    -- ── Posts / Announcements ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS posts (
+    id            INT AUTO_INCREMENT PRIMARY KEY,
+    enseignant_id INT NOT NULL,
+    module_id     INT NOT NULL,
+    contenu       TEXT NOT NULL,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (enseignant_id) REFERENCES enseignants(id) ON DELETE CASCADE,
+    FOREIGN KEY (module_id)     REFERENCES modules(id)     ON DELETE CASCADE
+);
+
+-- ── Comments ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS commentaires (
+    id           INT AUTO_INCREMENT PRIMARY KEY,
+    post_id      INT NOT NULL,
+    etudiant_id  INT NOT NULL,
+    contenu      TEXT NOT NULL,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (post_id)      REFERENCES posts(id)      ON DELETE CASCADE,
+    FOREIGN KEY (etudiant_id)  REFERENCES etudiants(id)  ON DELETE CASCADE
+);
+
+-- ── Notifications ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS notifications (
+    id           INT AUTO_INCREMENT PRIMARY KEY,
+    etudiant_id  INT NOT NULL,
+    post_id      INT NOT NULL,
+    lu           TINYINT(1) DEFAULT 0,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (etudiant_id) REFERENCES etudiants(id) ON DELETE CASCADE,
+    FOREIGN KEY (post_id)     REFERENCES posts(id)     ON DELETE CASCADE
+);
+
+-- ── Absences ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS absences (
+    id           INT AUTO_INCREMENT PRIMARY KEY,
+    etudiant_id  INT NOT NULL,
+    type         ENUM('td','tp') NOT NULL,
+    session_num  TINYINT NOT NULL,
+    module_id    INT NOT NULL,
+    statut       ENUM('P','A') NOT NULL DEFAULT 'P',
+    annee_univ   VARCHAR(10) NOT NULL DEFAULT '2025/2026',
+    UNIQUE KEY uq_abs (etudiant_id, type, session_num, module_id, annee_univ),
+    FOREIGN KEY (etudiant_id) REFERENCES etudiants(id) ON DELETE CASCADE,
+    FOREIGN KEY (module_id)   REFERENCES modules(id)   ON DELETE CASCADE
+);
+
+-- ── Timetable ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS emploi_du_temps (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    enseignant_id   INT NOT NULL,
+    jour            VARCHAR(15) NOT NULL,
+    heure_debut     VARCHAR(10) NOT NULL,
+    heure_fin       VARCHAR(10) NOT NULL,
+    type_seance     ENUM('Cours','TD','TP') NOT NULL,
+    groupe          VARCHAR(10) NOT NULL DEFAULT 'All',
+    salle           VARCHAR(50),
+    annee_univ      VARCHAR(10) NOT NULL DEFAULT '2025/2026',
+    FOREIGN KEY (enseignant_id) REFERENCES enseignants(id) ON DELETE CASCADE
+);

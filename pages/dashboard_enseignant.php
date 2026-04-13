@@ -107,8 +107,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_abs'])) {
         ON DUPLICATE KEY UPDATE statut = VALUES(statut)
     ");
     $stmt->execute([$etudiant_id, $module_id, $type, $session_num, $statut, APP_YEAR]);
-    // Redirect to avoid re-POST on refresh
     header("Location: dashboard.php?panel=absences&module_id=$module_id&type=$type");
+    exit;
+}
+
+// ============================================================
+//  POST — New announcement post
+// ============================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['new_post'])) {
+    $contenu   = trim($_POST['contenu']);
+    $module_id = (int)$_POST['module_id'];
+    if (!empty($contenu) && $module_id > 0) {
+        // Verify module belongs to this teacher
+        $chk = $pdo->prepare("SELECT id FROM modules WHERE id = ? AND enseignant_id = ?");
+        $chk->execute([$module_id, $user_id]);
+        if ($chk->fetch()) {
+            $stmt = $pdo->prepare("INSERT INTO posts (enseignant_id, module_id, contenu) VALUES (?,?,?)");
+            $stmt->execute([$user_id, $module_id, $contenu]);
+            $post_id = $pdo->lastInsertId();
+            // Notify all students in this module
+            $studs = $pdo->prepare("SELECT etudiant_id FROM inscriptions WHERE module_id = ? AND annee_univ = ?");
+            $studs->execute([$module_id, APP_YEAR]);
+            $nstmt = $pdo->prepare("INSERT IGNORE INTO notifications (etudiant_id, post_id) VALUES (?,?)");
+            foreach ($studs->fetchAll() as $s) {
+                $nstmt->execute([$s['etudiant_id'], $post_id]);
+            }
+            $notif = '<div class="notif notif-ok">&#10003; Post published successfully.</div>';
+        }
+    }
+}
+
+// ============================================================
+//  POST — Delete announcement post
+// ============================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_post'])) {
+    $post_id = (int)$_POST['post_id'];
+    $stmt = $pdo->prepare("DELETE FROM posts WHERE id = ? AND enseignant_id = ?");
+    $stmt->execute([$post_id, $user_id]);
+    header("Location: dashboard.php?panel=posts");
     exit;
 }
 
@@ -183,6 +219,19 @@ $abs_limit     = 5;
             Students
         </a>
         
+        <a href="dashboard.php?panel=posts" class="nav-item <?= $panel === 'posts' ? 'active-green' : '' ?>">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M2 2h12v9H2z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <path d="M5 5h6M5 7h4" stroke="currentColor" stroke-width="1.2"/>
+            </svg>
+            Announcements
+        </a>
+        <a href="dashboard.php?panel=ranking" class="nav-item <?= $panel === 'ranking' ? 'active-green' : '' ?>">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="M8 2l1.5 3 3.5.5-2.5 2.5.5 3.5L8 10l-3 1.5.5-3.5L3 5.5l3.5-.5z" stroke="currentColor" stroke-width="1.2" fill="none"/>
+            </svg>
+            Rankings
+        </a>
         <a href="dashboard.php?panel=emploi" class="nav-item <?= $panel === 'emploi' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/>
@@ -896,6 +945,181 @@ $abs_limit     = 5;
         <button type="submit" name="send_results" class="btn-send">&#10148; Send to Department</button>
     </form>
 
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : ANNOUNCEMENTS
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'posts'): ?>
+
+    <div class="page-head">
+        <div class="page-title">Announcements</div>
+        <div class="page-sub">Post homework, exam dates, or any message to your students</div>
+    </div>
+
+    <?= $notif ?>
+
+    <!-- New post form -->
+    <div class="card" style="margin-bottom:20px">
+        <div class="card-header">
+            <div class="card-title">New Post</div>
+        </div>
+        <form method="POST" action="dashboard.php?panel=posts">
+            <div class="fg">
+                <label>Module</label>
+                <select name="module_id">
+                    <?php foreach ($modules as $m): ?>
+                    <option value="<?= $m['id'] ?>"><?= h($m['code']) ?> — <?= h($m['intitule']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="fg">
+                <label>Message (text, link, anything)</label>
+                <textarea name="contenu" rows="4" style="width:100%;padding:8px 10px;border:1px solid var(--color-border);border-radius:var(--radius-md);font-size:13px;font-family:inherit;resize:vertical;outline:none" placeholder="Write your announcement here…"></textarea>
+            </div>
+            <button type="submit" name="new_post" class="btn-blue" style="padding:8px 20px;font-size:13px">Publish</button>
+        </form>
+    </div>
+
+    <!-- Existing posts -->
+    <?php
+    $stmt = $pdo->prepare("
+        SELECT p.*, m.code, m.intitule
+        FROM posts p
+        JOIN modules m ON m.id = p.module_id
+        WHERE p.enseignant_id = ?
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute([$user_id]);
+    $posts = $stmt->fetchAll();
+
+    if (empty($posts)):
+    ?>
+        <div class="card">
+            <div style="font-size:12px;color:var(--color-text-secondary);text-align:center;padding:20px">
+                No announcements yet. Write your first post above!
+            </div>
+        </div>
+    <?php else: ?>
+        <?php foreach ($posts as $post):
+            // Load comments for this post
+            $cstmt = $pdo->prepare("
+                SELECT c.*, e.nom, e.prenom
+                FROM commentaires c
+                JOIN etudiants e ON e.id = c.etudiant_id
+                WHERE c.post_id = ?
+                ORDER BY c.created_at ASC
+            ");
+            $cstmt->execute([$post['id']]);
+            $comments = $cstmt->fetchAll();
+        ?>
+        <div class="card" style="margin-bottom:14px">
+            <!-- Post header -->
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">
+                <div style="display:flex;align-items:center;gap:10px">
+                    <div class="avatar av-green"><?= h($initials) ?></div>
+                    <div>
+                        <div style="font-size:13px;font-weight:600"><?= h($ens['grade'] . ' ' . $ens['nom']) ?></div>
+                        <div style="font-size:10px;color:var(--color-text-tertiary)">
+                            <?= h($post['code']) ?> · <?= date('d/m/Y H:i', strtotime($post['created_at'])) ?>
+                        </div>
+                    </div>
+                </div>
+                <form method="POST" action="dashboard.php?panel=posts" onsubmit="return confirm('Delete this post?')">
+                    <input type="hidden" name="post_id" value="<?= $post['id'] ?>">
+                    <button type="submit" name="delete_post" class="btn-action btn-danger" style="font-size:10px">Delete</button>
+                </form>
+            </div>
+
+            <!-- Post content -->
+            <div style="font-size:13px;color:var(--color-text);line-height:1.7;white-space:pre-wrap;margin-bottom:14px;padding:10px;background:var(--color-bg-secondary);border-radius:var(--radius-sm)"><?= h($post['contenu']) ?></div>
+
+            <!-- Comments -->
+            <?php if (!empty($comments)): ?>
+            <div style="border-top:1px solid var(--color-border-light);padding-top:10px">
+                <div style="font-size:10px;font-weight:700;color:var(--color-text-tertiary);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">
+                    <?= count($comments) ?> comment<?= count($comments) !== 1 ? 's' : '' ?>
+                </div>
+                <?php foreach ($comments as $c): ?>
+                <div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start">
+                    <div class="avatar av-blue" style="width:24px;height:24px;font-size:8px;flex-shrink:0">
+                        <?= strtoupper(substr($c['prenom'],0,1) . substr($c['nom'],0,1)) ?>
+                    </div>
+                    <div style="flex:1;background:var(--color-bg-secondary);border-radius:var(--radius-sm);padding:6px 10px">
+                        <div style="font-size:11px;font-weight:600;margin-bottom:2px"><?= h($c['prenom'] . ' ' . $c['nom']) ?></div>
+                        <div style="font-size:12px;color:var(--color-text)"><?= h($c['contenu']) ?></div>
+                        <div style="font-size:10px;color:var(--color-text-tertiary);margin-top:3px"><?= date('d/m/Y H:i', strtotime($c['created_at'])) ?></div>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php else: ?>
+            <div style="font-size:11px;color:var(--color-text-tertiary);border-top:1px solid var(--color-border-light);padding-top:8px">
+                No comments yet.
+            </div>
+            <?php endif; ?>
+        </div>
+        <?php endforeach; ?>
+    <?php endif; ?>
+
+
+    <!-- ════════════════════════════════════════════════════
+         PANEL : RANKINGS
+    ════════════════════════════════════════════════════ -->
+    <?php elseif ($panel === 'ranking'): ?>
+
+    <div class="page-head">
+        <div class="page-title">Student Rankings</div>
+        <div class="page-sub">Students ranked by average — 1st, 2nd, 3rd…</div>
+    </div>
+
+    <?php foreach ($modules as $mod):
+        $stmt = $pdo->prepare("
+            SELECT e.nom, e.prenom, e.matricule, n.moyenne,
+                   RANK() OVER (ORDER BY n.moyenne DESC) as classement
+            FROM notes n
+            JOIN etudiants e ON e.id = n.etudiant_id
+            WHERE n.module_id = ? AND n.annee_univ = ?
+            AND n.moyenne IS NOT NULL
+            ORDER BY n.moyenne DESC
+        ");
+        $stmt->execute([$mod['id'], APP_YEAR]);
+        $rankings = $stmt->fetchAll();
+    ?>
+    <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+            <div class="card-title"><?= h($mod['code']) ?> — <?= h($mod['intitule']) ?></div>
+            <span class="badge b-blue"><?= count($rankings) ?> students</span>
+        </div>
+        <?php if (empty($rankings)): ?>
+            <div style="font-size:12px;color:var(--color-text-secondary)">No grades entered yet.</div>
+        <?php else: ?>
+        <table>
+            <thead>
+                <tr><th>Rank</th><th>Student ID</th><th>Full Name</th><th>Average /20</th></tr>
+            </thead>
+            <tbody>
+            <?php foreach ($rankings as $r):
+                $rank = (int)$r['classement'];
+                // Medal for top 3
+                $medal = match($rank) {
+                    1 => '🥇',
+                    2 => '🥈',
+                    3 => '🥉',
+                    default => '#' . $rank
+                };
+            ?>
+            <tr>
+                <td style="font-weight:700;font-size:<?= $rank <= 3 ? '16px' : '12px' ?>;text-align:center"><?= $medal ?></td>
+                <td style="font-family:monospace;font-size:11px"><?= h($r['matricule']) ?></td>
+                <td style="font-weight:<?= $rank <= 3 ? '700' : '400' ?>"><?= h($r['nom'] . ' ' . $r['prenom']) ?></td>
+                <td style="font-weight:700"><span class="<?= noteClass($r['moyenne']) ?>"><?= number_format($r['moyenne'], 2) ?></span></td>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+    <?php endforeach; ?>
 
     <!-- ════════════════════════════════════════════════════
          PANEL : PROFIL
