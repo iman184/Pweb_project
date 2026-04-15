@@ -45,6 +45,34 @@ if (isset($_POST['add_etud'])) {
     }
 }
 
+// Modifier un étudiant
+if (isset($_POST['update_etud'])) {
+    $etud_id = (int)($_POST['edit_id'] ?? 0);
+    $nom = trim($_POST['ue_nom'] ?? '');
+    $prenom = trim($_POST['ue_prenom'] ?? '');
+    $email = trim($_POST['ue_email'] ?? '');
+    $matricule = trim($_POST['ue_matricule'] ?? '');
+    $niveau = $_POST['ue_niveau'] ?? 'L1 Info';
+    $date_naissance = $_POST['ue_dob'] ?: null;
+    $actif = isset($_POST['ue_actif']) ? 1 : 0;
+
+    if (!$etud_id || !$nom || !$prenom || !$email || !$matricule) {
+        $notif = '<div class="notif notif-err">Veuillez remplir les champs obligatoires.</div>';
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $notif = '<div class="notif notif-err">Email invalide.</div>';
+    } else {
+        $chk = $pdo->prepare("SELECT id FROM etudiants WHERE (email = ? OR matricule = ?) AND id <> ?");
+        $chk->execute([$email, $matricule, $etud_id]);
+        if ($chk->fetch()) {
+            $notif = '<div class="notif notif-err">Cet email ou ce matricule est déjà utilisé par un autre étudiant.</div>';
+        } else {
+            $stmt = $pdo->prepare("UPDATE etudiants SET nom = ?, prenom = ?, email = ?, matricule = ?, niveau = ?, date_naissance = ?, actif = ? WHERE id = ?");
+            $stmt->execute([$nom, $prenom, $email, $matricule, $niveau, $date_naissance, $actif, $etud_id]);
+            $notif = '<div class="notif notif-ok">Informations de l\'étudiant mises à jour.</div>';
+        }
+    }
+}
+
 // Créer un compte enseignant
 if (isset($_POST['add_ens'])) {
     $res = admin_create_account([
@@ -62,6 +90,40 @@ if (isset($_POST['add_ens'])) {
     } else {
         $notif = '<div class="notif notif-err">' . h($res['message']) . '</div>';
     }
+}
+
+// Modifier un enseignant
+if (isset($_POST['update_ens'])) {
+    $ens_id = (int)($_POST['edit_ens_id'] ?? 0);
+    $nom = trim($_POST['ue_nom'] ?? '');
+    $prenom = trim($_POST['ue_prenom'] ?? '');
+    $email = trim($_POST['ue_email'] ?? '');
+    $grade = trim($_POST['ue_grade'] ?? 'Dr.');
+    $departement = trim($_POST['ue_dept'] ?? 'Informatique');
+    $specialite = trim($_POST['ue_spec'] ?? '');
+    $actif = isset($_POST['ue_actif']) ? 1 : 0;
+
+    if (!$ens_id || !$nom || !$prenom || !$email) {
+        $notif = '<div class="notif notif-err">Veuillez remplir les champs obligatoires.</div>';
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $notif = '<div class="notif notif-err">Email invalide.</div>';
+    } else {
+        $chk = $pdo->prepare("SELECT id FROM enseignants WHERE email = ? AND id <> ?");
+        $chk->execute([$email, $ens_id]);
+        if ($chk->fetch()) {
+            $notif = '<div class="notif notif-err">Cet email est déjà utilisé par un autre enseignant.</div>';
+        } else {
+            $stmt = $pdo->prepare("UPDATE enseignants SET nom = ?, prenom = ?, email = ?, grade = ?, departement = ?, specialite = ?, actif = ? WHERE id = ?");
+            $stmt->execute([$nom, $prenom, $email, $grade, $departement, $specialite, $actif, $ens_id]);
+            $notif = '<div class="notif notif-ok">Informations de l\'enseignant mises à jour.</div>';
+        }
+    }
+}
+
+// Supprimer un enseignant
+if (isset($_POST['delete_ens'])) {
+    $pdo->prepare("DELETE FROM enseignants WHERE id = ?")->execute([(int)$_POST['del_id']]);
+    $notif = '<div class="notif notif-ok">Enseignant supprimé.</div>';
 }
 
 // Ajouter un module
@@ -87,12 +149,32 @@ if (isset($_POST['do_inscr'])) {
 }
 
 // ── Données ───────────────────────────────────────────────
-$etudiants  = $pdo->query("SELECT * FROM etudiants  ORDER BY nom, prenom")->fetchAll();
+$edit_student = null;
+if (isset($_GET['edit'])) {
+    $edit_id = (int)$_GET['edit'];
+    if ($edit_id > 0) {
+        $stmt = $pdo->prepare("SELECT * FROM etudiants WHERE id = ?");
+        $stmt->execute([$edit_id]);
+        $edit_student = $stmt->fetch();
+    }
+}
+
+$edit_teacher = null;
+if (isset($_GET['edit_ens'])) {
+    $edit_id = (int)$_GET['edit_ens'];
+    if ($edit_id > 0) {
+        $stmt = $pdo->prepare("SELECT * FROM enseignants WHERE id = ?");
+        $stmt->execute([$edit_id]);
+        $edit_teacher = $stmt->fetch();
+    }
+}
+
+$etudiants_all  = $pdo->query("SELECT * FROM etudiants  ORDER BY nom, prenom")->fetchAll();
 $enseignants= $pdo->query("SELECT * FROM enseignants ORDER BY nom, prenom")->fetchAll();
 $modules    = $pdo->query("SELECT m.*, CONCAT(e.grade,' ',e.nom) as ens_nom FROM modules m LEFT JOIN enseignants e ON e.id = m.enseignant_id ORDER BY m.code")->fetchAll();
 
 // Stats globales
-$nb_etudiants   = count($etudiants);
+$nb_etudiants   = count($etudiants_all);
 $nb_enseignants = count($enseignants);
 $nb_modules     = count($modules);
 $nb_notes       = $pdo->query("SELECT COUNT(*) FROM notes WHERE annee_univ='2025/2026'")->fetchColumn();
@@ -211,8 +293,11 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
         </div>
 
         <!-- Bouton Ajouter -->
-        <div style="margin-bottom:14px;">
+        <div style="margin-bottom:14px; display:flex; gap:12px; flex-wrap:wrap;">
             <button class="btn-blue" onclick="toggleForm('add-etud-form')">+ Créer un compte étudiant</button>
+            <?php if ($edit_student): ?>
+                <a href="?panel=etudiants" class="btn-sm" style="background:var(--color-surface); color:var(--color-text); line-height:32px;">Annuler la modification</a>
+            <?php endif; ?>
         </div>
 
         <!-- Info box -->
@@ -220,6 +305,34 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
             <span>ℹ️</span>
             <div>Seul l'administrateur peut créer des comptes. Un <strong>mot de passe temporaire</strong> est attribué — l'étudiant devra le changer à sa première connexion.</div>
         </div>
+
+        <?php if ($edit_student): ?>
+        <div id="edit-etud-form" class="form-inline show">
+            <form method="POST">
+                <input type="hidden" name="edit_id" value="<?= (int)$edit_student['id'] ?>">
+                <div class="stat-grid sg3">
+                    <div class="fg"><label>Nom</label><input type="text" name="ue_nom" required value="<?= h($edit_student['nom']) ?>"></div>
+                    <div class="fg"><label>Prénom</label><input type="text" name="ue_prenom" required value="<?= h($edit_student['prenom']) ?>"></div>
+                    <div class="fg"><label>Email</label><input type="email" name="ue_email" required value="<?= h($edit_student['email']) ?>"></div>
+                    <div class="fg"><label>Matricule</label><input type="text" name="ue_matricule" required value="<?= h($edit_student['matricule']) ?>"></div>
+                    <div class="fg">
+                        <label>Niveau</label>
+                        <select name="ue_niveau">
+                            <?php foreach (['L1 Info','L2 ISIL','L3 Info','M1 ISIL','M2 ISIL'] as $niv): ?>
+                            <option value="<?= h($niv) ?>" <?= $edit_student['niveau'] === $niv ? 'selected' : '' ?>><?= h($niv) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="fg"><label>Date de naissance</label><input type="date" name="ue_dob" value="<?= h($edit_student['date_naissance'] ?? '') ?>"></div>
+                </div>
+                <div class="fg" style="max-width:300px; display:flex; gap:10px; align-items:center;">
+                    <label style="width:100%;">Statut du compte</label>
+                    <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" name="ue_actif" value="1" <?= $edit_student['actif'] ? 'checked' : '' ?>> Actif</label>
+                </div>
+                <button type="submit" name="update_etud" class="btn-blue">✅ Enregistrer les modifications</button>
+            </form>
+        </div>
+        <?php endif; ?>
 
         <div id="add-etud-form" class="form-inline">
             <form method="POST">
@@ -251,16 +364,27 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
             </form>
         </div>
 
+        <!-- Recherche en temps réel -->
+        <div class="card" style="background:var(--color-surface); margin-bottom:14px;">
+            <div style="display:flex; gap:12px; align-items:flex-end;">
+                <div class="fg" style="flex:1; margin:0;">
+                    <label>🔍 Rechercher par nom ou matricule</label>
+                    <input type="text" id="studentSearchInput" placeholder="Ex: Jean Dupont ou 12345" style="width:100%;" oninput="filterStudentTable()">
+                </div>
+                <button type="button" class="btn-sm" onclick="document.getElementById('studentSearchInput').value=''; filterStudentTable();" style="white-space:nowrap;">Réinitialiser</button>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <div class="card-title">Liste des étudiants</div>
-                <span class="badge b-mid"><?= $nb_etudiants ?> étudiants</span>
+                <span class="badge b-mid"><span id="studentCountDisplay"><?= count($etudiants_all) ?></span> étudiant(s)</span>
             </div>
             <table>
                 <thead><tr><th>Matricule</th><th>Nom & Prénom</th><th>Email</th><th>Niveau</th><th>Statut MDP</th><th>Inscrit le</th><th>Actions</th></tr></thead>
-                <tbody>
-                <?php foreach ($etudiants as $e): ?>
-                <tr>
+                <tbody id="studentTableBody">
+                <?php foreach ($etudiants_all as $e): ?>
+                <tr class="student-row" data-matricule="<?= h($e['matricule']) ?>" data-name="<?= h(strtolower($e['nom'] . ' ' . $e['prenom'])) ?>">
                     <td><?= h($e['matricule']) ?></td>
                     <td><?= h($e['nom'] . ' ' . $e['prenom']) ?></td>
                     <td><?= h($e['email']) ?></td>
@@ -273,7 +397,8 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                         <?php endif; ?>
                     </td>
                     <td><?= date('d/m/Y', strtotime($e['created_at'])) ?></td>
-                    <td>
+                    <td style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <a href="?panel=etudiants&edit=<?= $e['id'] ?>" class="btn-action btn-secondary" style="padding:6px 10px;">Modifier</a>
                         <form method="POST" style="display:inline;" onsubmit="return confirm('Supprimer cet étudiant ?')">
                             <input type="hidden" name="del_id" value="<?= $e['id'] ?>">
                             <button type="submit" name="delete_etud" class="btn-action btn-danger">Supprimer</button>
@@ -283,6 +408,14 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                 <?php endforeach; ?>
                 </tbody>
             </table>
+            <div id="studentNoResults" style="text-align:center; padding:20px; color:var(--color-text-secondary); display:none;">
+                Aucun étudiant trouvé.
+            </div>
+            <?php if (empty($etudiants_all)): ?>
+            <div style="text-align:center; padding:20px; color:var(--color-text-secondary);">
+                Aucun étudiant enregistré.
+            </div>
+            <?php endif; ?>
         </div>
 
         <?php elseif ($panel === 'enseignants'): ?>
@@ -336,12 +469,61 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
             </form>
         </div>
 
+        <?php if ($edit_teacher): ?>
+        <div id="edit-ens-form" class="form-inline show">
+            <form method="POST">
+                <input type="hidden" name="edit_ens_id" value="<?= (int)$edit_teacher['id'] ?>">
+                <div class="stat-grid sg3">
+                    <div class="fg"><label>Nom</label><input type="text" name="ue_nom" required value="<?= h($edit_teacher['nom']) ?>"></div>
+                    <div class="fg"><label>Prénom</label><input type="text" name="ue_prenom" required value="<?= h($edit_teacher['prenom']) ?>"></div>
+                    <div class="fg"><label>Email</label><input type="email" name="ue_email" required value="<?= h($edit_teacher['email']) ?>"></div>
+                    <div class="fg">
+                        <label>Grade</label>
+                        <select name="ue_grade">
+                            <?php foreach (['Assistant','Dr.','Pr.','MCA','MCB'] as $g): ?>
+                            <option value="<?= h($g) ?>" <?= $edit_teacher['grade'] === $g ? 'selected' : '' ?>><?= h($g) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="fg">
+                        <label>Département</label>
+                        <select name="ue_dept">
+                            <option value="Informatique" <?= $edit_teacher['departement'] === 'Informatique' ? 'selected' : '' ?>>Informatique</option>
+                            <option value="Math &amp; Info" <?= $edit_teacher['departement'] === 'Math & Info' ? 'selected' : '' ?>>Math &amp; Info</option>
+                        </select>
+                    </div>
+                    <div class="fg"><label>Spécialité</label><input type="text" name="ue_spec" value="<?= h($edit_teacher['specialite']) ?>"></div>
+                </div>
+                <div class="fg" style="max-width:300px; display:flex; gap:10px; align-items:center;">
+                    <label style="width:100%;">Statut du compte</label>
+                    <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" name="ue_actif" value="1" <?= $edit_teacher['actif'] ? 'checked' : '' ?>> Actif</label>
+                </div>
+                <button type="submit" name="update_ens" class="btn-blue">✅ Enregistrer les modifications</button>
+                <button type="button" onclick="window.location.href='?panel=enseignants'" style="margin-left:8px;" class="btn-sm">Annuler</button>
+            </form>
+        </div>
+        <?php endif; ?>
+
+        <div class="card" style="background:var(--color-surface); margin-bottom:14px;">
+            <div style="display:flex; gap:12px; align-items:flex-end;">
+                <div class="fg" style="flex:1; margin:0;">
+                    <label>🔍 Rechercher par nom, email ou département</label>
+                    <input type="text" id="teacherSearchInput" placeholder="Ex: Salim Laachemi" style="width:100%;" oninput="filterTeacherTable()">
+                </div>
+                <button type="button" class="btn-sm" onclick="document.getElementById('teacherSearchInput').value=''; filterTeacherTable();" style="white-space:nowrap;">Réinitialiser</button>
+            </div>
+        </div>
+
         <div class="card">
+            <div class="card-header">
+                <div class="card-title">Liste des enseignants</div>
+                <span class="badge b-mid"><span id="teacherCountDisplay"><?= count($enseignants) ?></span> enseignant(s)</span>
+            </div>
             <table>
-                <thead><tr><th>ID</th><th>Nom & Prénom</th><th>Grade</th><th>Email</th><th>Département</th><th>Spécialité</th><th>Statut MDP</th></tr></thead>
-                <tbody>
+                <thead><tr><th>ID</th><th>Nom & Prénom</th><th>Grade</th><th>Email</th><th>Département</th><th>Spécialité</th><th>Statut MDP</th><th>Actions</th></tr></thead>
+                <tbody id="teacherTableBody">
                 <?php foreach ($enseignants as $e): ?>
-                <tr>
+                <tr class="teacher-row" data-name="<?= h(strtolower($e['nom'] . ' ' . $e['prenom'])) ?>" data-email="<?= h(strtolower($e['email'])) ?>" data-dept="<?= h(strtolower($e['departement'])) ?>">
                     <td>E<?= str_pad($e['id'], 3, '0', STR_PAD_LEFT) ?></td>
                     <td><?= h($e['nom'] . ' ' . $e['prenom']) ?></td>
                     <td><?= h($e['grade']) ?></td>
@@ -355,10 +537,20 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                             <span class="badge b-ok">✓ Modifié</span>
                         <?php endif; ?>
                     </td>
+                    <td style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <a href="?panel=enseignants&edit_ens=<?= $e['id'] ?>" class="btn-action btn-secondary" style="padding:6px 10px;">Modifier</a>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Supprimer cet enseignant ?')">
+                            <input type="hidden" name="del_id" value="<?= $e['id'] ?>">
+                            <button type="submit" name="delete_ens" class="btn-action btn-danger">Supprimer</button>
+                        </form>
+                    </td>
                 </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
+            <div id="teacherNoResults" style="text-align:center; padding:20px; color:var(--color-text-secondary); display:none;">
+                Aucun enseignant trouvé.
+            </div>
         </div>
 
         <?php elseif ($panel === 'modules'): ?>
@@ -543,6 +735,63 @@ function genPw(fieldId) {
     for (var i = 0; i < 10; i++) pw += chars[Math.floor(Math.random() * chars.length)];
     document.getElementById(fieldId).value = pw;
     document.getElementById(fieldId).type  = 'text';
+}
+function filterStudentTable() {
+    var searchInput = document.getElementById('studentSearchInput');
+    var searchTerm = searchInput.value.toLowerCase().trim();
+    var rows = document.querySelectorAll('.student-row');
+    var visibleCount = 0;
+    
+    rows.forEach(function(row) {
+        var matricule = row.getAttribute('data-matricule').toLowerCase();
+        var name = row.getAttribute('data-name').toLowerCase();
+        
+        if (matricule.includes(searchTerm) || name.includes(searchTerm)) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    // Update count display
+    document.getElementById('studentCountDisplay').textContent = visibleCount;
+    
+    // Show/hide "no results" message
+    var noResultsDiv = document.getElementById('studentNoResults');
+    if (visibleCount === 0 && searchTerm.length > 0) {
+        noResultsDiv.style.display = 'block';
+    } else {
+        noResultsDiv.style.display = 'none';
+    }
+}
+
+function filterTeacherTable() {
+    var searchInput = document.getElementById('teacherSearchInput');
+    var searchTerm = searchInput.value.toLowerCase().trim();
+    var rows = document.querySelectorAll('.teacher-row');
+    var visibleCount = 0;
+
+    rows.forEach(function(row) {
+        var name = row.getAttribute('data-name').toLowerCase();
+        var email = row.getAttribute('data-email').toLowerCase();
+        var dept = row.getAttribute('data-dept').toLowerCase();
+
+        if (name.includes(searchTerm) || email.includes(searchTerm) || dept.includes(searchTerm)) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    document.getElementById('teacherCountDisplay').textContent = visibleCount;
+    var noResultsDiv = document.getElementById('teacherNoResults');
+    if (visibleCount === 0 && searchTerm.length > 0) {
+        noResultsDiv.style.display = 'block';
+    } else {
+        noResultsDiv.style.display = 'none';
+    }
 }
 </script>
 </body>
