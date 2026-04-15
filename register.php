@@ -4,7 +4,14 @@
 // ============================================================
 require_once 'includes/auth.php';
 
+<<<<<<< HEAD
 if (is_logged_in()) { header('Location: dashboard.php'); exit; }
+=======
+if (is_logged_in()) {
+    header('Location: ' . get_dashboard_url());
+    exit;
+}
+>>>>>>> d079fcc (Initial commit: Clean USTHB Portal Core)
 
 $error   = '';
 $success = '';
@@ -209,4 +216,8 @@ function selRegRole(r) {
 }
 </script>
 </body>
+<<<<<<< HEAD
 </html>
+=======
+</html>
+>>>>>>> d079fcc (Initial commit: Clean USTHB Portal Core)

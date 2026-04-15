@@ -4,7 +4,14 @@
 // ============================================================
 require_once 'includes/auth.php';
 
+<<<<<<< HEAD
 if (is_logged_in()) { header('Location: dashboard.php'); exit; }
+=======
+if (is_logged_in()) {
+    header('Location: ' . get_dashboard_url());
+    exit;
+}
+>>>>>>> d079fcc (Initial commit: Clean USTHB Portal Core)
 
 $error    = '';
 $pre_role = $_GET['role'] ?? 'etudiant';
@@ -22,9 +29,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($result['success']) {
             if (!empty($result['must_change'])) {
                 header('Location: change_password.php');
+<<<<<<< HEAD
             } else {
                 header('Location: dashboard.php');
             }
+=======
+                exit;
+            }
+
+            header('Location: ' . get_dashboard_url());
+>>>>>>> d079fcc (Initial commit: Clean USTHB Portal Core)
             exit;
         } else {
             $error = $result['message'];
