@@ -80,13 +80,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_note'])) {
             $parts2 = array_filter([$td, $tp, $exam], fn($x) => $x !== null);
             $moy    = count($parts2) > 0 ? array_sum($parts2) / count($parts2) : null;
 
-            $stmt = $pdo->prepare("
-                INSERT INTO notes (etudiant_id, module_id, td, tp, exam, moyenne, note, annee_univ)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE td=VALUES(td), tp=VALUES(tp), exam=VALUES(exam), moyenne=VALUES(moyenne), note=VALUES(note)
-            ");
-            $stmt->execute([$etudiant_id, $module_id, $td, $tp, $exam, $moy, $moy, APP_YEAR]);
-            $notif = '<div class="notif notif-ok">&#10003; Grade saved successfully.</div>';
+            if ($moy === null) {
+                $notif = '<div class="notif notif-err">Please enter at least one grade (TD, TP or Exam).</div>';
+            } else {
+                $stmt = $pdo->prepare("
+                    INSERT INTO notes (etudiant_id, module_id, td, tp, exam, moyenne, note, annee_univ)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        td=VALUES(td), tp=VALUES(tp), exam=VALUES(exam),
+                        moyenne=VALUES(moyenne), note=VALUES(note)
+                ");
+                $stmt->execute([$etudiant_id, $module_id, $td, $tp, $exam, $moy, $moy, APP_YEAR]);
+                $notif = '<div class="notif notif-ok">&#10003; Grade saved successfully.</div>';
+            }
         }
     }
 }
@@ -272,11 +278,11 @@ $abs_limit     = 5;
     <?php if ($panel === 'accueil'):
         // Gather stats
         $all_avgs  = [];
-        $at_risk   = [];
+        $at_risk   = []; 
         $excl_risk = [];
         foreach ($modules as $mod) {
             $s = $pdo->prepare("
-                SELECT e.id, e.nom, e.prenom, e.matricule, n.moyenne
+                SELECT e.id, e.nom, e.prenom, e.matricule, COALESCE(n.moyenne, n.note) AS moyenne
                 FROM inscriptions i
                 JOIN etudiants e ON e.id = i.etudiant_id
                 LEFT JOIN notes n ON n.etudiant_id = e.id AND n.module_id = ? AND n.annee_univ = ?
@@ -284,9 +290,10 @@ $abs_limit     = 5;
             ");
             $s->execute([$mod['id'], APP_YEAR, $mod['id'], APP_YEAR]);
             foreach ($s->fetchAll() as $r) {
-                if ($r['moyenne'] !== null) $all_avgs[] = (float)$r['moyenne'];
-                if ($r['moyenne'] !== null && $r['moyenne'] < 10)
-                    $at_risk[] = ['nom'=>$r['nom'].' '.$r['prenom'], 'mat'=>$r['matricule'], 'moy'=>$r['moyenne'], 'mod'=>$mod['code']];
+                $moyenne = $r['moyenne'] ?? null;
+                if ($moyenne !== null) $all_avgs[] = (float)$moyenne;
+                if ($moyenne !== null && $moyenne < 10)
+                    $at_risk[] = ['nom'=>$r['nom'].' '.$r['prenom'], 'mat'=>$r['matricule'], 'moy'=>$moyenne, 'mod'=>$mod['code']];
                 $atd = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='td' AND statut='A' AND annee_univ=?");
                 $atd->execute([$r['id'], $mod['id'], APP_YEAR]);
                 $atp = $pdo->prepare("SELECT COUNT(*) FROM absences WHERE etudiant_id=? AND module_id=? AND type='tp' AND statut='A' AND annee_univ=?");
@@ -436,7 +443,7 @@ $abs_limit     = 5;
     <?php foreach ($modules as $mod):
         $stmt = $pdo->prepare("
             SELECT e.id, e.nom, e.prenom, e.matricule,
-                   n.td, n.tp, n.exam, n.moyenne
+                   n.td, n.tp, n.exam, COALESCE(n.moyenne, n.note) AS moyenne
             FROM inscriptions i
             JOIN etudiants e ON e.id = i.etudiant_id
             LEFT JOIN notes n ON n.etudiant_id = e.id
@@ -697,7 +704,7 @@ $abs_limit     = 5;
     <?php foreach ($modules as $mod):
         $stmt = $pdo->prepare("
             SELECT e.matricule, e.nom, e.prenom, e.email, e.niveau,
-                   n.moyenne
+                   COALESCE(n.moyenne, n.note) AS moyenne
             FROM inscriptions i
             JOIN etudiants e ON e.id = i.etudiant_id
             LEFT JOIN notes n ON n.etudiant_id = e.id AND n.module_id = ? AND n.annee_univ = ?
@@ -766,7 +773,7 @@ $abs_limit     = 5;
                 $cnt->execute([$mod['id'], APP_YEAR]);
                 $nb_etuds = $cnt->fetchColumn();
 
-                $avg_q = $pdo->prepare("SELECT AVG(moyenne) FROM notes WHERE module_id=? AND annee_univ=?");
+                $avg_q = $pdo->prepare("SELECT AVG(COALESCE(moyenne, note)) FROM notes WHERE module_id=? AND annee_univ=?");
                 $avg_q->execute([$mod['id'], APP_YEAR]);
                 $cls_avg = $avg_q->fetchColumn();
             ?>
@@ -888,7 +895,7 @@ $abs_limit     = 5;
     $all_results = [];
     foreach ($modules as $mod):
         $stmt = $pdo->prepare("
-            SELECT e.matricule, e.nom, e.prenom, n.td, n.tp, n.exam, n.moyenne
+            SELECT e.matricule, e.nom, e.prenom, COALESCE(n.moyenne, n.note) AS moyenne
             FROM inscriptions i
             JOIN etudiants e ON e.id = i.etudiant_id
             LEFT JOIN notes n ON n.etudiant_id = e.id AND n.module_id = ? AND n.annee_univ = ?
@@ -1074,13 +1081,13 @@ $abs_limit     = 5;
 
     <?php foreach ($modules as $mod):
         $stmt = $pdo->prepare("
-            SELECT e.nom, e.prenom, e.matricule, n.moyenne,
-                   RANK() OVER (ORDER BY n.moyenne DESC) as classement
+             SELECT e.nom, e.prenom, e.matricule, COALESCE(n.moyenne, n.note) AS moyenne,
+                 RANK() OVER (ORDER BY COALESCE(n.moyenne, n.note) DESC) as classement
             FROM notes n
             JOIN etudiants e ON e.id = n.etudiant_id
             WHERE n.module_id = ? AND n.annee_univ = ?
-            AND n.moyenne IS NOT NULL
-            ORDER BY n.moyenne DESC
+             AND COALESCE(n.moyenne, n.note) IS NOT NULL
+             ORDER BY COALESCE(n.moyenne, n.note) DESC
         ");
         $stmt->execute([$mod['id'], APP_YEAR]);
         $rankings = $stmt->fetchAll();
