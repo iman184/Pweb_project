@@ -67,9 +67,21 @@ if (isset($_POST['add_ens'])) {
 // Ajouter un module
 if (isset($_POST['add_mod'])) {
     try {
-        $stmt = $pdo->prepare("INSERT INTO modules (code, intitule, coefficient, niveau, enseignant_id, annee_univ) VALUES (?,?,?,?,?,?)");
-        $stmt->execute([$_POST['mod_code'], $_POST['mod_intitule'], (int)$_POST['mod_coeff'], $_POST['mod_niveau'], $_POST['mod_ens'] ?: null, '2025/2026']);
-        $notif = '<div class="notif notif-ok">Module créé avec succès.</div>';
+        $mod_ens = $_POST['mod_ens'] !== '' ? (int)$_POST['mod_ens'] : null;
+        if ($mod_ens !== null) {
+            $chk = $pdo->prepare("SELECT COUNT(*) FROM modules WHERE enseignant_id = ?");
+            $chk->execute([$mod_ens]);
+            if ((int)$chk->fetchColumn() > 0) {
+                $notif = '<div class="notif notif-err">Cet enseignant a déjà un module attribué.</div>';
+                $mod_ens = null;
+            }
+        }
+
+        if (!isset($notif) || $notif === '') {
+            $stmt = $pdo->prepare("INSERT INTO modules (code, intitule, coefficient, niveau, enseignant_id, annee_univ) VALUES (?,?,?,?,?,?)");
+            $stmt->execute([$_POST['mod_code'], $_POST['mod_intitule'], (int)$_POST['mod_coeff'], $_POST['mod_niveau'], $mod_ens, '2025/2026']);
+            $notif = '<div class="notif notif-ok">Module créé avec succès.</div>';
+        }
     } catch (\PDOException $e) {
         $notif = '<div class="notif notif-err">Erreur : ce code de module existe déjà.</div>';
     }
@@ -89,6 +101,13 @@ if (isset($_POST['do_inscr'])) {
 // ── Données ───────────────────────────────────────────────
 $etudiants  = $pdo->query("SELECT * FROM etudiants  ORDER BY nom, prenom")->fetchAll();
 $enseignants= $pdo->query("SELECT * FROM enseignants ORDER BY nom, prenom")->fetchAll();
+$enseignants_libres = $pdo->query("
+    SELECT e.*
+    FROM enseignants e
+    LEFT JOIN modules m ON m.enseignant_id = e.id
+    WHERE m.id IS NULL
+    ORDER BY e.nom, e.prenom
+")->fetchAll();
 $modules    = $pdo->query("SELECT m.*, CONCAT(e.grade,' ',e.nom) as ens_nom FROM modules m LEFT JOIN enseignants e ON e.id = m.enseignant_id ORDER BY m.code")->fetchAll();
 
 // Stats globales
@@ -159,6 +178,10 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
         <a href="?panel=stats"     class="nav-item <?= $panel === 'stats'     ? 'active-amber' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="9" width="3" height="5" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="6.5" y="6" width="3" height="8" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="11" y="3" width="3" height="11" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
             Statistiques
+        </a>
+        <a href="?panel=resultats" class="nav-item <?= $panel === 'resultats' ? 'active-amber' : '' ?>">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 13l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
+            Résultats transmis
         </a>
     </div>
 
@@ -365,7 +388,7 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
         <!-- ── Modules ── -->
         <div class="page-head">
             <div class="page-title">Gestion des modules</div>
-            <div class="page-sub">Créer et assigner des modules aux enseignants</div>
+            <div class="page-sub">Chaque enseignant peut avoir un seul module assigné</div>
         </div>
 
         <div style="margin-bottom:14px;">
@@ -389,7 +412,7 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                         <label>Enseignant</label>
                         <select name="mod_ens">
                             <option value="">– Non assigné –</option>
-                            <?php foreach ($enseignants as $e): ?>
+                            <?php foreach ($enseignants_libres as $e): ?>
                             <option value="<?= $e['id'] ?>"><?= h($e['grade'] . ' ' . $e['nom']) ?></option>
                             <?php endforeach; ?>
                         </select>
@@ -526,6 +549,47 @@ $initials = strtoupper(substr($admin['prenom'], 0, 1) . substr($admin['nom'], 0,
                 <?php endforeach; ?>
                 </tbody>
             </table>
+        </div>
+        <?php elseif ($panel === 'resultats'): ?>
+        <!-- ── Résultats transmis ── -->
+        <div class="page-head">
+            <div class="page-title">Résultats transmis</div>
+            <div class="page-sub">Derniers envois des enseignants vers l'administration</div>
+        </div>
+
+        <?php
+        $envois = $pdo->query("
+            SELECT r.created_at, r.annee_univ, r.nb_etudiants, r.nb_notes, r.moyenne_classe,
+                   m.code, m.intitule,
+                   CONCAT(e.grade, ' ', e.nom) AS enseignant
+            FROM resultats_envois r
+            JOIN modules m ON m.id = r.module_id
+            JOIN enseignants e ON e.id = r.enseignant_id
+            ORDER BY r.created_at DESC
+        ")->fetchAll();
+        ?>
+
+        <div class="card">
+            <div class="card-header"><div class="card-title">Historique des envois</div></div>
+            <?php if (empty($envois)): ?>
+                <div style="font-size:12px;color:var(--color-text-secondary)">Aucun résultat transmis pour le moment.</div>
+            <?php else: ?>
+            <table>
+                <thead><tr><th>Date</th><th>Enseignant</th><th>Module</th><th>Étudiants</th><th>Notes</th><th>Moyenne</th></tr></thead>
+                <tbody>
+                <?php foreach ($envois as $e): ?>
+                <tr>
+                    <td style="font-size:11px;color:var(--color-text-secondary)"><?= h($e['created_at']) ?></td>
+                    <td><?= h($e['enseignant']) ?></td>
+                    <td><?= h($e['code'] . ' – ' . $e['intitule']) ?></td>
+                    <td><?= (int)$e['nb_etudiants'] ?></td>
+                    <td><?= (int)$e['nb_notes'] ?></td>
+                    <td style="font-weight:600"><?= $e['moyenne_classe'] !== null ? number_format((float)$e['moyenne_classe'], 2) : '–' ?></td>
+                </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
 

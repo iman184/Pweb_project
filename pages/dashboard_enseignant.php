@@ -36,9 +36,15 @@ if (!$ens) { header('Location: login.php'); exit; }
 $stmt = $pdo->prepare("SELECT * FROM modules WHERE enseignant_id = ? AND annee_univ = ?");
 $stmt->execute([$user_id, APP_YEAR]);
 $modules = $stmt->fetchAll();
+$module = $modules[0] ?? null;
+$modules = $module ? [$module] : [];
 
 $initials = strtoupper(substr($ens['prenom'], 0, 1) . substr($ens['nom'], 0, 1));
-$panel    = $_GET['panel'] ?? 'accueil';
+$allowed_panels = ['modules', 'notes', 'etudiants', 'resultats'];
+$panel    = $_GET['panel'] ?? 'modules';
+if (!in_array($panel, $allowed_panels, true)) {
+    $panel = 'modules';
+}
 $notif    = '';
 
 // ============================================================
@@ -92,68 +98,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_note'])) {
 }
 
 // ============================================================
-//  POST — Save attendance (one cell at a time)
+//  Attendance exclusion threshold used for grade rules
 // ============================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_abs'])) {
-    $etudiant_id = (int)$_POST['etudiant_id'];
-    $module_id   = (int)$_POST['module_id'];
-    $type        = $_POST['abs_type'] === 'tp' ? 'tp' : 'td';
-    $session_num = (int)$_POST['session_num'];
-    $statut      = $_POST['statut'] === 'A' ? 'A' : 'P';
-
-    $stmt = $pdo->prepare("
-        INSERT INTO absences (etudiant_id, module_id, type, session_num, statut, annee_univ)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE statut = VALUES(statut)
-    ");
-    $stmt->execute([$etudiant_id, $module_id, $type, $session_num, $statut, APP_YEAR]);
-    header("Location: dashboard.php?panel=absences&module_id=$module_id&type=$type");
-    exit;
-}
-
-// ============================================================
-//  POST — New announcement post
-// ============================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['new_post'])) {
-    $contenu   = trim($_POST['contenu']);
-    $module_id = (int)$_POST['module_id'];
-    if (!empty($contenu) && $module_id > 0) {
-        // Verify module belongs to this teacher
-        $chk = $pdo->prepare("SELECT id FROM modules WHERE id = ? AND enseignant_id = ?");
-        $chk->execute([$module_id, $user_id]);
-        if ($chk->fetch()) {
-            $stmt = $pdo->prepare("INSERT INTO posts (enseignant_id, module_id, contenu) VALUES (?,?,?)");
-            $stmt->execute([$user_id, $module_id, $contenu]);
-            $post_id = $pdo->lastInsertId();
-            // Notify all students in this module
-            $studs = $pdo->prepare("SELECT etudiant_id FROM inscriptions WHERE module_id = ? AND annee_univ = ?");
-            $studs->execute([$module_id, APP_YEAR]);
-            $nstmt = $pdo->prepare("INSERT IGNORE INTO notifications (etudiant_id, post_id) VALUES (?,?)");
-            foreach ($studs->fetchAll() as $s) {
-                $nstmt->execute([$s['etudiant_id'], $post_id]);
-            }
-            $notif = '<div class="notif notif-ok">&#10003; Post published successfully.</div>';
-        }
-    }
-}
-
-// ============================================================
-//  POST — Delete announcement post
-// ============================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_post'])) {
-    $post_id = (int)$_POST['post_id'];
-    $stmt = $pdo->prepare("DELETE FROM posts WHERE id = ? AND enseignant_id = ?");
-    $stmt->execute([$post_id, $user_id]);
-    header("Location: dashboard.php?panel=posts");
-    exit;
-}
-
-// ============================================================
-//  Attendance panel: which module and type?
-// ============================================================
-$att_module_id = (int)($_GET['module_id'] ?? ($modules[0]['id'] ?? 0));
-$att_type      = ($_GET['type'] ?? 'td') === 'tp' ? 'tp' : 'td';
-$att_sessions  = 10;
 $abs_limit     = 5;
 ?>
 <!DOCTYPE html>
@@ -190,25 +136,19 @@ $abs_limit     = 5;
     <div class="sidebar">
         <div class="nav-section">MY SPACE</div>
 
-        <a href="dashboard.php?panel=accueil" class="nav-item <?= $panel === 'accueil' ? 'active-green' : '' ?>">
+        <a href="dashboard.php?panel=modules" class="nav-item <?= $panel === 'modules' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <path d="M2 6.5L8 2l6 4.5V14H2V6.5z" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                <path d="M5 1v3M11 1v3M2 7h12" stroke="currentColor" stroke-width="1.3"/>
             </svg>
-            Home
+            My Modules
         </a>
         <a href="dashboard.php?panel=notes" class="nav-item <?= $panel === 'notes' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <path d="M3 3h10v10H3z" stroke="currentColor" stroke-width="1.4" fill="none"/>
                 <path d="M6 7l2 2 4-4" stroke="currentColor" stroke-width="1.4" fill="none"/>
             </svg>
-            Grade Entry
-        </a>
-        <a href="dashboard.php?panel=absences" class="nav-item <?= $panel === 'absences' ? 'active-green' : '' ?>">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4" fill="none"/>
-                <path d="M8 5v4l2 2" stroke="currentColor" stroke-width="1.4" fill="none"/>
-            </svg>
-            Attendance
+            Enter / Edit Grades
         </a>
         <a href="dashboard.php?panel=etudiants" class="nav-item <?= $panel === 'etudiants' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -218,39 +158,12 @@ $abs_limit     = 5;
             </svg>
             Students
         </a>
-        
-        <a href="dashboard.php?panel=posts" class="nav-item <?= $panel === 'posts' ? 'active-green' : '' ?>">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <path d="M2 2h12v9H2z" stroke="currentColor" stroke-width="1.4" fill="none"/>
-                <path d="M5 5h6M5 7h4" stroke="currentColor" stroke-width="1.2"/>
-            </svg>
-            Announcements
-        </a>
-        <a href="dashboard.php?panel=ranking" class="nav-item <?= $panel === 'ranking' ? 'active-green' : '' ?>">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <path d="M8 2l1.5 3 3.5.5-2.5 2.5.5 3.5L8 10l-3 1.5.5-3.5L3 5.5l3.5-.5z" stroke="currentColor" stroke-width="1.2" fill="none"/>
-            </svg>
-            Rankings
-        </a>
-        <a href="dashboard.php?panel=emploi" class="nav-item <?= $panel === 'emploi' ? 'active-green' : '' ?>">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/>
-                <path d="M5 1v3M11 1v3M2 7h12" stroke="currentColor" stroke-width="1.3"/>
-            </svg>
-            Timetable
-        </a>
+
         <a href="dashboard.php?panel=resultats" class="nav-item <?= $panel === 'resultats' ? 'active-green' : '' ?>">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                 <path d="M2 13l3-4 3 2 3-5 3 3" stroke="currentColor" stroke-width="1.4" fill="none"/>
             </svg>
             Send Results
-        </a>
-        <a href="dashboard.php?panel=profil" class="nav-item <?= $panel === 'profil' ? 'active-green' : '' ?>">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="5" r="3" stroke="currentColor" stroke-width="1.4" fill="none"/>
-                <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" stroke-width="1.4" fill="none"/>
-            </svg>
-            My Profile
         </a>
 
         <a href="logout.php" class="nav-item" style="margin-top:auto;color:var(--color-red);border-top:1px solid var(--color-border-light);">
@@ -902,6 +815,20 @@ $abs_limit     = 5;
 
     // POST: send
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_results'])) {
+        if ($module) {
+            $count_q = $pdo->prepare("SELECT COUNT(*) FROM inscriptions WHERE module_id=? AND annee_univ=?");
+            $count_q->execute([$module['id'], APP_YEAR]);
+            $nb_etudiants = (int)$count_q->fetchColumn();
+
+            $notes_q = $pdo->prepare("SELECT note FROM notes WHERE module_id=? AND annee_univ=? AND note IS NOT NULL");
+            $notes_q->execute([$module['id'], APP_YEAR]);
+            $notes = array_map('floatval', $notes_q->fetchAll(PDO::FETCH_COLUMN));
+            $nb_notes = count($notes);
+            $moyenne_classe = $nb_notes > 0 ? array_sum($notes) / $nb_notes : null;
+
+            $save = $pdo->prepare("INSERT INTO resultats_envois (enseignant_id, module_id, annee_univ, nb_etudiants, nb_notes, moyenne_classe) VALUES (?, ?, ?, ?, ?, ?)");
+            $save->execute([$user_id, $module['id'], APP_YEAR, $nb_etudiants, $nb_notes, $moyenne_classe]);
+        }
         $notif = '<div class="notif notif-ok">&#10003; Results successfully sent to the department.</div>';
     }
     ?>
