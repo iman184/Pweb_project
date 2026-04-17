@@ -2,6 +2,9 @@
 // ============================================================
 //  index.php — Page d'accueil
 // ============================================================
+<?php
+include 'config.php';
+?>
 require_once('includes/auth.php');
 // Si déjà connecté → rediriger vers la page de rôle appropriée
 if (is_logged_in()) {
